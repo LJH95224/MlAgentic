@@ -29,6 +29,21 @@ class Settings(BaseSettings):
         alias="DATABASE_URL",
     )
 
+    # --- LLM 网关（3.2 阶段启用） ---
+    # 通过 LiteLLM 统一调用 DeepSeek / Qwen / GLM 等模型，仅需修改 .env 即可切换厂商。
+    # 模型命名规范：
+    #   - DeepSeek 官方：       deepseek/deepseek-chat、deepseek/deepseek-reasoner
+    #   - 阿里 DashScope（Qwen）：dashscope/qwen-max
+    #   - 智谱：                zhipu/glm-4
+    # 若 LITELLM_MODEL 未带厂商前缀（如直接写 "deepseek-chat"），LLM 客户端会根据
+    # LITELLM_API_BASE 推断并自动补前缀，以减少 .env 配置失误。
+    litellm_model: str | None = Field(default=None, alias="LITELLM_MODEL")
+    litellm_api_key: str | None = Field(default=None, alias="LITELLM_API_KEY")
+    litellm_api_base: str | None = Field(default=None, alias="LITELLM_API_BASE")
+    # 请求级超时（秒）与重试次数，给 LiteLLM 透传
+    litellm_timeout: float = Field(default=60.0, alias="LITELLM_TIMEOUT")
+    litellm_num_retries: int = Field(default=2, alias="LITELLM_NUM_RETRIES")
+
     # --- Agent 控制（3.3 阶段使用，先预留默认值） ---
     agent_max_iterations: int = Field(default=5, alias="AGENT_MAX_ITERATIONS")
 
