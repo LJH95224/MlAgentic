@@ -1,0 +1,27 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# --- 虚拟环境与配置 ---
+.env
+.venv/
+venv/
+
+# --- IDE ---
+.vscode/
+.idea/
+
+# --- 操作系统 ---
+.DS_Store
+Thumbs.db
+
+# --- 项目运行时产物 ---
+logs/
+*.log
+*.sqlite
+*.db

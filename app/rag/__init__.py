@@ -1,0 +1,1 @@
+"""Agentic RAG 模块（3.5 阶段引入 pgvector 检索工具）。"""
