@@ -30,6 +30,7 @@ ruff>=0.6.9
 # --- LLM 网关（3.2 阶段启用） ---
 litellm>=1.50.0
 
-# --- 预留（3.3 阶段引入） ---
-# langgraph>=0.2.30
-# langchain-core>=0.3.0
+# --- Agent 编排（3.3 阶段启用） ---
+langgraph>=0.2.30
+langchain-core>=0.3.0
+langchain-openai>=0.2.0

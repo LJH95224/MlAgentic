@@ -1,101 +1,249 @@
-"""Agent 流式执行器。
+"""Agent 流式执行器（基于 LangGraph）。
 
-V1.0 阶段（3.1）：此处提供一个 mock 实现，用于打通 SSE 链路并验证 API-03
-（控制流与文本流的混合下发）。3.3 阶段会替换为 LangGraph 真实驱动，
-**对外签名（run_stream）保持稳定**，service 层无需感知内部变化。
+V1.0（3.3 阶段）：在保持对外签名稳定的前提下，把 3.1 的 mock 实现替换为
+真实的 LangGraph ReAct 引擎。
 
-接口契约：
-    run_stream(session_id, user_input) -> AsyncIterator[AgentEvent]
-        ↳ 异步生成器，逐条产出 AgentEvent。
+对外契约（与 mock 时期完全一致，service 层无感知）：
+    run_stream(session_id, user_input, history=None) -> AsyncIterator[AgentEvent]
+
+内部流程：
+    1. 将 history（OpenAI dict 格式）转为 LangChain BaseMessage 列表
+    2. 追加当前 user_input
+    3. 调用 graph.astream(stream_mode=["messages", "custom"])
+    4. 把 LangGraph 的流事件翻译为 AgentEvent 序列
 """
 
-import asyncio
+import logging
 import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Literal
 
+from langchain_core.messages import (
+    AIMessage,
+    AIMessageChunk,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
 
-# ────────────── Agent 内部事件 ──────────────
-# Agent 产出的中间事件结构。Service 层负责将其翻译为 SSE 事件。
-# 之所以再设一层，是为了避免 Agent 直接依赖 HTTP/SSE 协议细节。
+from app.agent.graph import get_compiled_graph
+from app.core.config import get_settings
+
+logger = logging.getLogger(__name__)
+
+
+# ────────────── Agent 内部事件（与 3.1 mock 阶段保持一致） ──────────────
 
 
 @dataclass
 class AgentTextChunk:
     """文本块（一个或多个 token）。"""
 
-    kind: Literal["text"] = "text"
     content: str = ""
+    kind: Literal["text"] = "text"
 
 
 @dataclass
 class AgentToolStart:
     """工具开始执行。"""
 
-    kind: Literal["tool_start"] = "tool_start"
     tool: str = ""
     args: dict | None = None
+    kind: Literal["tool_start"] = "tool_start"
 
 
 @dataclass
 class AgentToolEnd:
     """工具执行结束。"""
 
-    kind: Literal["tool_end"] = "tool_end"
     tool: str = ""
     output: str | None = None
+    kind: Literal["tool_end"] = "tool_end"
 
 
 @dataclass
 class AgentDone:
     """运行完成。"""
 
-    kind: Literal["done"] = "done"
     final_content: str = ""
+    kind: Literal["done"] = "done"
 
 
 AgentEvent = AgentTextChunk | AgentToolStart | AgentToolEnd | AgentDone
 
 
-# ────────────── Mock 执行器 ──────────────
+# ────────────── 历史消息格式转换 ──────────────
+
+
+def _dict_to_message(d: dict) -> BaseMessage | None:
+    """把 OpenAI 风格的 dict 消息转成 LangChain BaseMessage。
+
+    跳过不识别的 role；assistant 含 tool_calls 时也保留（让模型理解历史的完整链路）。
+    """
+    role = d.get("role")
+    content = d.get("content") or ""
+    if role == "user":
+        return HumanMessage(content=content)
+    if role == "system":
+        return SystemMessage(content=content)
+    if role == "assistant":
+        tool_calls = d.get("tool_calls") or []
+        # LangChain 期望的 tool_calls 是 {name, args(dict), id} 格式
+        normalized = []
+        for tc in tool_calls:
+            fn = tc.get("function", {})
+            args = fn.get("arguments", "{}")
+            if isinstance(args, str):
+                import json as _json
+
+                try:
+                    args = _json.loads(args)
+                except _json.JSONDecodeError:
+                    args = {"_raw": args}
+            normalized.append({"name": fn.get("name", ""), "args": args, "id": tc.get("id", "")})
+        return AIMessage(content=content, tool_calls=normalized)
+    if role == "tool":
+        return ToolMessage(
+            content=content,
+            tool_call_id=d.get("tool_call_id", ""),
+            name=d.get("name", ""),
+        )
+    return None
+
+
+def _build_initial_messages(
+    user_input: str,
+    history: list[dict] | None,
+) -> list[BaseMessage]:
+    """构造首次进入图时的消息列表。"""
+    msgs: list[BaseMessage] = []
+    if history:
+        for d in history:
+            m = _dict_to_message(d)
+            if m is not None:
+                msgs.append(m)
+    msgs.append(HumanMessage(content=user_input))
+    return msgs
+
+
+# ────────────── 主入口 ──────────────
 
 
 async def run_stream(
     session_id: uuid.UUID,
     user_input: str,
+    history: list[dict] | None = None,
 ) -> AsyncIterator[AgentEvent]:
-    """V1.0 mock 实现：模拟一段"思考 → 调用工具 → 回答"的完整链路。
+    """执行一次 ReAct 推理，流式产出 AgentEvent。
 
-    用于验证：
-    - API-02 打字机式文本流
-    - API-03 文本流 / 控制流的区分推送
-    - AGT-02 多次进入工具节点（这里通过 1 次 tool 调用模拟）
-
-    3.3 阶段将由 LangGraph 的真实 ReAct 循环替换。
+    Args:
+        session_id: 会话 ID（当前用于日志，未来可作为 LangGraph thread_id）
+        user_input: 本轮用户输入
+        history: 历史消息（OpenAI dict 格式），可为 None
     """
-    # 1) 先吐一段"思考中"的开场文本
-    intro = f"收到你的问题：「{user_input}」。让我先查一下知识库..."
-    async for chunk in _stream_text(intro):
-        yield AgentTextChunk(content=chunk)
+    settings = get_settings()
+    graph = get_compiled_graph()
 
-    # 2) 模拟工具调用：tool_start → 工作 → tool_end
-    yield AgentToolStart(tool="mock_search", args={"query": user_input[:32]})
-    await asyncio.sleep(0.3)  # 模拟工具耗时
-    yield AgentToolEnd(tool="mock_search", output="（已返回 3 条假设的知识切片）")
+    initial_state = {
+        "messages": _build_initial_messages(user_input, history),
+        "remaining_iterations": settings.agent_max_iterations,
+    }
 
-    # 3) 综合回答
-    answer = "根据检索到的内容，这是一个 mock 的最终答复。3.3 阶段会接入真实 LangGraph ReAct 循环。"
-    final_chunks: list[str] = []
-    async for chunk in _stream_text(answer):
-        final_chunks.append(chunk)
-        yield AgentTextChunk(content=chunk)
+    logger.info(
+        "Agent 启动: session=%s history=%d max_iter=%d",
+        session_id,
+        len(history or []),
+        settings.agent_max_iterations,
+    )
 
-    yield AgentDone(final_content=intro + answer)
+    # 累积输出文本，作为最终回复落库
+    final_text_parts: list[str] = []
+    # 跟踪已发出 tool_start 的 tool_call index，避免增量 chunk 中重复发射。
+    # 注意：以 index 为键，因为 id / name 可能分散在不同 chunk 中先后出现，
+    # 而 LangChain 保证同一工具调用的 index 在所有 chunk 中一致。
+    started_tool_indices: set[int] = set()
+    # 缓存每个 index 对应的工具名，在 name 字段首次出现时即可发射 tool_start
+    index_to_name: dict[int, str] = {}
+    # 对于一次性返回的完整 AIMessage（无 tool_call_chunks），用 id 去重
+    started_tool_call_ids: set[str] = set()
+
+    async for mode, payload in graph.astream(
+        initial_state,
+        stream_mode=["messages", "custom"],
+    ):
+        if mode == "messages":
+            # payload = (chunk: AIMessage | AIMessageChunk, metadata: dict)
+            # 注意：AIMessageChunk 是 AIMessage 的子类。某些场景下 LangGraph
+            # 可能吐出非 chunk 的完整 AIMessage（如某次调用未走流式），
+            # 用 AIMessage 检查可同时兼容两种。
+            chunk, _meta = payload
+            if not isinstance(chunk, AIMessage):
+                continue
+
+            # 1) 文本（流式 chunk 和完整 AIMessage 都通过 content 暴露）
+            if chunk.content:
+                # content 偶尔会是 list（多 part 内容），统一为 str
+                text = chunk.content if isinstance(chunk.content, str) else _flatten_content(chunk.content)
+                if text:
+                    final_text_parts.append(text)
+                    yield AgentTextChunk(content=text)
+
+            # 2) 工具调用 —— 兼容两条路径：
+            #    a) AIMessageChunk: tool_call_chunks 增量，name 可能后到
+            #    b) 完整 AIMessage:  tool_calls 一次性齐全
+            tcc = getattr(chunk, "tool_call_chunks", None) or []
+            if tcc:
+                for tc_chunk in tcc:
+                    idx = tc_chunk.get("index")
+                    if idx is None:
+                        continue
+                    # 累积 name（同一 index 跨多 chunk 出现时，后续覆盖前面的空值）
+                    name_piece = tc_chunk.get("name")
+                    if name_piece:
+                        index_to_name[idx] = name_piece
+                    if idx in started_tool_indices:
+                        continue
+                    full_name = index_to_name.get(idx)
+                    if not full_name:
+                        continue
+                    started_tool_indices.add(idx)
+                    yield AgentToolStart(tool=full_name, args=None)
+            else:
+                # 路径 b：没有 tool_call_chunks，但完整 tool_calls 可能存在
+                for tc in getattr(chunk, "tool_calls", None) or []:
+                    tc_id = tc.get("id") or ""
+                    if tc_id and tc_id in started_tool_call_ids:
+                        continue
+                    name = tc.get("name")
+                    if not name:
+                        continue
+                    if tc_id:
+                        started_tool_call_ids.add(tc_id)
+                    yield AgentToolStart(tool=name, args=tc.get("args"))
+
+        elif mode == "custom":
+            # payload = tool_node 通过 get_stream_writer() 发出的 dict
+            if isinstance(payload, dict) and payload.get("kind") == "tool_end":
+                yield AgentToolEnd(
+                    tool=payload.get("tool", ""),
+                    output=payload.get("output"),
+                )
+
+    final_content = "".join(final_text_parts)
+    logger.info("Agent 完成: session=%s output_len=%d", session_id, len(final_content))
+    yield AgentDone(final_content=final_content)
 
 
-async def _stream_text(text: str, chunk_size: int = 4, delay: float = 0.04) -> AsyncIterator[str]:
-    """将文本按固定块大小切分后异步逐块吐出，模拟 token 流。"""
-    for i in range(0, len(text), chunk_size):
-        await asyncio.sleep(delay)
-        yield text[i : i + chunk_size]
+def _flatten_content(content_parts) -> str:
+    """把 LangChain 多 part 内容（list[dict]）扁平化为纯文本。"""
+    out: list[str] = []
+    for p in content_parts or []:
+        if isinstance(p, str):
+            out.append(p)
+        elif isinstance(p, dict):
+            t = p.get("text") or p.get("content")
+            if isinstance(t, str):
+                out.append(t)
+    return "".join(out)

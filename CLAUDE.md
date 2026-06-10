@@ -2,14 +2,25 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## 📌 工作前必读（强制流程）
+
+**任何编码任务开始前，必须按此顺序阅读**：
+
+1. [docs/progress.md](docs/progress.md) —— **当前进度文档**：了解项目实现到哪一步、各模块状态、关键文件位置、待办清单。
+2. [docs/GeoAgent V1.0 (基础底座) 需求规格说明书.md](docs/GeoAgent%20V1.0%20%28%E5%9F%BA%E7%A1%80%E5%BA%95%E5%BA%A7%29%20%E9%9C%80%E6%B1%82%E8%A7%84%E6%A0%BC%E8%AF%B4%E6%98%8E%E4%B9%A6.md) —— **需求文档（PRD）**：项目目标、技术栈强制要求、需求 ID 与验收标准。
+3. [environment_guide_zh.md](environment_guide_zh.md) —— Conda + uv 混合环境管理规范。
+
+**任何模块完成（或对已完成模块做实质性改动）后，必须同步更新 [docs/progress.md](docs/progress.md)**：
+- 把对应模块状态改为 ✅，填入完成日期
+- 列出新增/修改的关键文件、交付内容、验证结果
+- 更新底部"历史变更"区
+- 若有新增的架构契约或关键设计决策，在该模块小节中明确写出
+
+进度文档是后续 Claude 实例快速接手的唯一可靠入口，**禁止跳过更新**。
+
 ## 项目定位
 
-**TyAgent / GeoAgent V1.0** —— 一个面向气象空间智能的 Agent 后端引擎基础底座。当前仓库处于初始化阶段，**尚未有任何源代码**，仅包含两份文档：
-
-- [environment_guide_zh.md](environment_guide_zh.md) —— Conda + uv 混合环境管理规范
-- [docs/GeoAgent V1.0 (基础底座) 需求规格说明书.md](docs/GeoAgent%20V1.0%20%28%E5%9F%BA%E7%A1%80%E5%BA%95%E5%BA%A7%29%20%E9%9C%80%E6%B1%82%E8%A7%84%E6%A0%BC%E8%AF%B4%E6%98%8E%E4%B9%A6.md) —— V1.0 PRD
-
-后续开发须围绕该 PRD 推进；在搭建任何模块前请先阅读这两份文档。
+**TyAgent / GeoAgent V1.0** —— 一个面向气象空间智能的 Agent 后端引擎基础底座。后续开发须围绕 PRD 推进；当前进度参见 [docs/progress.md](docs/progress.md)。
 
 ## 目标技术栈（PRD 强制）
 
@@ -59,6 +70,16 @@ uv pip freeze > requirements.txt                     # 锁定纯 Python 依赖
 
 ## 当前状态
 
-- 仓库**不是** Git 仓库（无 `.git`），平台 Windows 10 / bash shell。
-- 尚无构建、测试、lint 配置 —— 这些工具链需要在第一次落代码时一并建立（建议 `ruff` + `pytest`，仍走 `uv pip install` 安装）。
+- 平台 Windows 10 / bash shell。
+- 已建立工具链：`ruff` + `pytest`（配置见 [pyproject.toml](pyproject.toml)），所有 Python 依赖在 `geo_agent` conda 环境内。
 - 文档与代码注释**统一使用简体中文**。
+- **当前实现进度查看 [docs/progress.md](docs/progress.md)** —— 该文档是判断"什么已完成、下一步做什么"的唯一真实来源。
+
+## 用户操作约定（重要）
+
+以下操作由**用户手动执行**，Claude 不要自动调用：
+
+1. **依赖安装**（`uv pip install <pkg>`）—— Claude 只更新 `requirements.txt`，由用户执行安装命令。
+2. **运行类命令**（`pytest`、`uvicorn`、联调脚本等）—— Claude 给出运行指令，由用户执行后把输出贴回。
+
+Claude 可以读文件、写代码、写测试、写文档，但不要自作主张去 `pip install` 或启动长进程。
