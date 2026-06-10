@@ -1,7 +1,7 @@
 # ============================================================
 # TyAgent / GeoAgent V1.0 - Python 依赖清单
-# 安装方式（务必使用 uv，禁用裸 pip）：
-#   uv pip install -r requirements.txt
+# 安装方式（务必使用 uv，禁用裸 pip；走清华镜像加速）：
+#   uv pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 # ============================================================
 
 # --- Web 框架与 ASGI ---
@@ -14,10 +14,15 @@ pydantic>=2.9.0
 pydantic-settings>=2.5.0
 python-dotenv>=1.0.1
 
-# --- 数据库（SQLAlchemy 2.0 async + asyncpg + pgvector） ---
+# --- 数据库（SQLAlchemy 2.0 async + asyncpg；PostgreSQL 仅存会话/消息） ---
 sqlalchemy[asyncio]>=2.0.35
 asyncpg>=0.29.0
-pgvector>=0.3.6
+
+# --- 向量库（Milvus，3.5 阶段启用） ---
+pymilvus>=2.6.0
+
+# --- 知识图谱（Neo4j，3.6 阶段启用） ---
+neo4j>=5.20.0
 
 # --- 测试 ---
 httpx>=0.27.0

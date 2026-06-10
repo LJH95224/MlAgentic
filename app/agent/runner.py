@@ -76,6 +76,42 @@ AgentEvent = AgentTextChunk | AgentToolStart | AgentToolEnd | AgentDone
 # ────────────── 历史消息格式转换 ──────────────
 
 
+# Agent 系统提示词。每次会话开头注入，引导模型正确使用工具。
+# 关键设计：
+# - 工具用途与适用场景的明确分工说明
+# - KG-04 联合查询的推荐模式（先 KG 锚定实体 → 再 RAG 精筛原文）
+# - 防止模型陷入连续重试同一工具（触发熔断）
+_SYSTEM_PROMPT = """你是一个具备主动检索能力的智能助手。你有以下工具可用：
+
+1. **search_knowledge_base(query, top_k, doc_type?, document_id?, entity_tags?)**
+   - 用途：在向量知识库中按语义检索文本片段
+   - 适用：用户问的是事实/数据/原文，需要从知识库取证
+   - 返回：编号片段列表，含 score 与来源 doc
+
+2. **query_knowledge_graph(entity_name, entity_type?, relation_types?, max_hops?)**
+   - 用途：在知识图谱中查询实体的关联路径
+   - 适用：用户问"X 和 Y 之间的关系"或"X 涉及哪些相关实体"
+   - 返回：路径列表，形如 "A → REL → B"
+
+3. **mock_weather_parser(station_id, date)**：mock 气象站数据查询，仅用于测试
+
+## 工具使用准则
+
+**单工具场景**：
+- 纯事实/语义查询 → 直接调 search_knowledge_base
+- 纯关系/多跳推理 → 直接调 query_knowledge_graph
+
+**Graph RAG 联合场景**（用户问题既涉及实体关系又需要原文支撑）：
+1. 先调 query_knowledge_graph 拿到相关实体列表
+2. 再调 search_knowledge_base，把上一步得到的实体名传入 entity_tags 精筛
+
+**重要约束**：
+- 同一工具最多重复调用 2 次。如果两次都没拿到满意结果，应该换一种工具或基于已有信息直接回答
+- 不要无限重试同一查询，会触发熔断
+- 拿到足够信息后，立即综合输出最终答案，不要继续调工具
+"""
+
+
 def _dict_to_message(d: dict) -> BaseMessage | None:
     """把 OpenAI 风格的 dict 消息转成 LangChain BaseMessage。
 
@@ -116,8 +152,20 @@ def _build_initial_messages(
     user_input: str,
     history: list[dict] | None,
 ) -> list[BaseMessage]:
-    """构造首次进入图时的消息列表。"""
+    """构造首次进入图时的消息列表。
+
+    首条强制为 SystemMessage（工具使用准则），避免模型陷入工具循环。
+    若 history 已含 system 消息，则跳过默认的（用户/上游自定义优先）。
+    """
     msgs: list[BaseMessage] = []
+
+    # 检查 history 是否已含 system 消息
+    history_has_system = any(
+        (d.get("role") == "system") for d in (history or [])
+    )
+    if not history_has_system:
+        msgs.append(SystemMessage(content=_SYSTEM_PROMPT))
+
     if history:
         for d in history:
             m = _dict_to_message(d)

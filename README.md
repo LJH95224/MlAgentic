@@ -8,11 +8,14 @@
 
 ## 当前进度
 
-- ✅ **3.1 接入与通信模块**（API-01 / API-02 / API-03）—— 框架已搭建，Agent 内核为 mock 流式输出
-- ⏳ 3.2 LLM 路由（LiteLLM 接入）
-- ⏳ 3.3 LangGraph ReAct 引擎
-- ⏳ 3.4 本地脚本工具
-- ⏳ 3.5 Agentic RAG（pgvector）
+- ✅ **3.1 接入与通信模块**（API-01 / API-02 / API-03）
+- ✅ **3.2 LLM 路由**（LiteLLM 接入）
+- ✅ **3.3 LangGraph ReAct 引擎**
+- ✅ **3.4 本地脚本工具**（subprocess + 30s 超时）
+- ⏳ 3.5 Agentic RAG（**Milvus** · HNSW · 4096 维）
+- ⏳ 3.6 知识图谱（**Neo4j** · Graph RAG 联合查询）
+
+> 详细进度看 [docs/progress.md](docs/progress.md)。
 
 ## 快速开始
 
@@ -22,8 +25,8 @@
 # 激活 conda 环境（详见 environment_guide_zh.md）
 conda activate geo_agent
 
-# 安装 Python 依赖（必须用 uv，禁用裸 pip）
-uv pip install -r requirements.txt
+# 安装 Python 依赖（必须用 uv，禁用裸 pip；走清华镜像）
+uv pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 ```
 
 ### 2. 配置数据库
@@ -31,10 +34,11 @@ uv pip install -r requirements.txt
 ```bash
 # 复制环境变量样例并填入真实 PostgreSQL 连接串
 cp .env.example .env
-
-# PostgreSQL 需启用 pgvector 扩展
-# 在 psql 中执行：CREATE EXTENSION IF NOT EXISTS vector;
 ```
+
+> V1.0 PostgreSQL 仅存会话与消息，不再使用 pgvector。
+> 向量检索由 Milvus（3.5）承担，知识图谱由 Neo4j（3.6）承担，
+> 两者均通过 `.env` 配置独立服务地址，待对应模块开发时再启用。
 
 ### 3. 启动服务
 
@@ -72,13 +76,14 @@ SSE 输出会区分两类事件：
 app/
   api/v1/endpoints/   # FastAPI 路由
   schemas/            # Pydantic I/O 模型
-  models/             # SQLAlchemy ORM（chat_sessions / chat_messages / knowledge_chunks）
+  models/             # SQLAlchemy ORM（chat_sessions / chat_messages）
   services/           # 业务编排（API 与 Agent 之间的胶水）
-  agent/              # LangGraph Agent（V1.0 阶段为 mock runner）
-  llm/                # LiteLLM 网关（占位）
-  tools/              # 本地脚本工具（占位）
-  rag/                # Agentic RAG（占位）
-  db/                 # 异步引擎与 Session
+  agent/              # LangGraph Agent（ReAct 状态机）
+  llm/                # LiteLLM 网关
+  tools/              # 本地脚本工具（subprocess + dummy）
+  rag/                # Agentic RAG（Milvus，3.5 阶段引入）
+  kg/                 # 知识图谱（Neo4j，3.6 阶段引入）
+  db/                 # PostgreSQL 异步引擎与 Session
   core/               # 配置、日志
 tests/                # pytest 测试
 ```

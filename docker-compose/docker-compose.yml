@@ -1,0 +1,108 @@
+version: '3.5'
+
+services:
+  etcd:
+    container_name: milvus-etcd
+    image: quay.io/coreos/etcd:v3.5.25
+    environment:
+      - ETCD_AUTO_COMPACTION_MODE=revision
+      - ETCD_AUTO_COMPACTION_RETENTION=1000
+      - ETCD_QUOTA_BACKEND_BYTES=4294967296
+      - ETCD_SNAPSHOT_COUNT=50000
+    volumes:
+      - d:/dockerVolumes/milvus-etcd/etcd:/etcd
+      - d:/dockerVolumes/milvus-etcd/configs:/milvus/configs
+    command: etcd -advertise-client-urls=http://etcd:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  minio:
+    container_name: milvus-minio
+    image: minio/minio:RELEASE.2024-12-18T13-15-44Z
+    environment:
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+    ports:
+      - "9001:9001"
+      - "9000:9000"
+    volumes:
+      - d:/dockerVolumes/minio:/minio_data
+    command: minio server /minio_data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  standalone:
+    container_name: milvus-standalone
+    image: milvusdb/milvus:v2.6.18
+    command: ["milvus", "run", "standalone"]
+    security_opt:
+    - seccomp:unconfined
+    environment:
+      ETCD_ENDPOINTS: etcd:2379
+      MINIO_ADDRESS: minio:9000
+      MQ_TYPE: woodpecker
+    volumes:
+      - d:/dockerVolumes/milvus:/var/lib/milvus
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+      interval: 30s
+      start_period: 90s
+      timeout: 20s
+      retries: 3
+    ports:
+      - "19530:19530"
+      - "9091:9091"
+    depends_on:
+      - "etcd"
+      - "minio"
+
+  # ============================================================
+  # Neo4j 知识图谱服务（PRD §3.6 KG-01）
+  # ------------------------------------------------------------
+  # 端口：
+  #   7474 — HTTP 浏览器 UI（访问 http://localhost:7474）
+  #   7687 — Bolt 协议（Python Driver 走这个端口连接）
+  # 默认账号：neo4j / tyagent_neo4j
+  #   - 首次启动若需修改密码，请同时更新本仓库 .env 中的 NEO4J_PASSWORD
+  # 插件：APOC（KG-03 多跳查询常用过程库）
+  # 资源：堆内存 1G、page cache 512m，适配开发环境；生产部署需调大
+  # ============================================================
+  neo4j:
+    container_name: tyagent-neo4j
+    image: neo4j:5.26-community
+    environment:
+      # 初始账号密码（首次启动生效，后续改密走 cypher 或 neo4j-admin）
+      NEO4J_AUTH: neo4j/tyagent_neo4j
+      # 启用 APOC 插件；通过 NEO4J_PLUGINS 自动下载并安装
+      NEO4J_PLUGINS: '["apoc"]'
+      # 允许 APOC 的非受限过程调用（如 apoc.export.*、apoc.load.*）
+      NEO4J_dbms_security_procedures_unrestricted: 'apoc.*'
+      NEO4J_dbms_security_procedures_allowlist: 'apoc.*'
+      # JVM 内存（开发态保守设置）
+      NEO4J_server_memory_heap_initial__size: 512m
+      NEO4J_server_memory_heap_max__size: 1G
+      NEO4J_server_memory_pagecache_size: 512m
+    volumes:
+      - d:/dockerVolumes/neo4j/data:/data
+      - d:/dockerVolumes/neo4j/logs:/logs
+      - d:/dockerVolumes/neo4j/plugins:/plugins
+      - d:/dockerVolumes/neo4j/import:/var/lib/neo4j/import
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    healthcheck:
+      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://localhost:7474 || exit 1"]
+      interval: 30s
+      start_period: 60s
+      timeout: 10s
+      retries: 3
+
+networks:
+  default:
+    name: milvus

@@ -40,9 +40,9 @@ conda activate geo_agent
 ## 4. Claude 操作指南（LLM 交互强制规范）
 在协助本项目生成代码、编写脚本或提供终端命令时，**Claude 必须严格遵守以下规则：**
 
-1. **包安装指令：** 永远不要建议用户使用传统的 `pip install <package>`。必须始终使用 `uv pip install <package>` 以保证速度和一致性。
+1. **包安装指令：** 永远不要建议用户使用传统的 `pip install <package>`。必须始终使用 `uv pip install <package> -i https://pypi.tuna.tsinghua.edu.cn/simple` 以保证速度和一致性（清华镜像加速国内访问）。
 2. **GeoAI 环境隔离保护：** 如果需求涉及引入新的空间/地理处理库，请优先评估其是否依赖 GDAL 或 PROJ。如果是，请务必建议使用 `conda install <package> -c conda-forge`。除非有非常稳定可靠的独立预编译包，否则禁止将 uv 混入 C 语言底层库的安装链条中。
-3. **环境同步策略：** 如需批量添加标准的 Python 库，请提示用户将其写入 `requirements.txt` 中，并运行 `uv pip compile` 或 `uv pip install -r requirements.txt`。
+3. **环境同步策略：** 如需批量添加标准的 Python 库，请提示用户将其写入 `requirements.txt` 中，并运行 `uv pip compile` 或 `uv pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple`。
 
 ---
 
@@ -69,6 +69,6 @@ conda activate geo_agent
 # 2. 在该环境中安全安装 uv 核心组件
 conda install uv -c conda-forge -y
 
-# 3. 使用 uv 极速恢复所有纯 Python 的 Agent 依赖
-uv pip install -r requirements.txt
+# 3. 使用 uv 极速恢复所有纯 Python 的 Agent 依赖（走清华镜像）
+uv pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 ```

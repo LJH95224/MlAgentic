@@ -6,10 +6,13 @@
 - get_tool_map() 返回 name → BaseTool 字典，供 tool_node 按名称查找并执行。
 - 3.4 阶段：增加 subprocess 脚本调度工具。
 - 3.5 阶段：增加 search_knowledge_base 工具。
+- 3.6 阶段：增加 query_knowledge_graph 工具。
 """
 
 from langchain_core.tools import BaseTool
 
+from app.kg import query_knowledge_graph
+from app.rag import search_knowledge_base
 from app.tools.weather_parser import mock_weather_parser
 
 # 已注册工具清单。
@@ -18,6 +21,8 @@ from app.tools.weather_parser import mock_weather_parser
 #   2. 在这里 import 并追加到列表
 _REGISTERED_TOOLS: list[BaseTool] = [
     mock_weather_parser,
+    search_knowledge_base,
+    query_knowledge_graph,
 ]
 
 
