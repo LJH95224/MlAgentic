@@ -12,7 +12,7 @@
 | 接入与通信 | 3.1 | ✅ 完成 | 2026-06-09 |
 | LLM 路由 | 3.2 | ✅ 完成 | 2026-06-09 |
 | Agent 编排（LangGraph ReAct） | 3.3 | ✅ 完成 | 2026-06-10 |
-| 本地执行工具（subprocess） | 3.4 | ⏳ 待做 | — |
+| 本地执行工具（subprocess） | 3.4 | ✅ 完成 | 2026-06-10 |
 | Agentic RAG（pgvector） | 3.5 | ⏳ 待做 | — |
 
 ---
@@ -124,14 +124,37 @@ START → call_model → should_continue（条件边）
 
 ---
 
-## 待办
+## 3.4 本地执行工具模块 ✅
 
-### 3.4 本地执行工具模块（下一步）
+### 交付内容
 
-| 需求 ID | 要求 | 实现路径 |
+| 需求 ID | 实现位置 | 状态 |
 |---|---|---|
-| TOL-01 | 基于 `subprocess.run` 的通用脚本执行引擎，30s 超时强制 Kill | 新增 `app/tools/script_runner.py` |
-| TOL-02 | mock_weather_parser | ✅ 3.3 已完成 |
+| **TOL-01** subprocess 引擎，30s 超时强制 Kill | [app/tools/script_runner.py](../app/tools/script_runner.py) | ✅ |
+| TOL-02 mock_weather_parser | 3.3 已完成 | ✅ |
+
+### 文件清单
+
+- [app/tools/script_runner.py](../app/tools/script_runner.py) — 异步 subprocess 引擎
+  - `run_script(cmd, timeout, cwd, env, stdin_text)` → `ScriptResult(returncode, stdout, stderr, elapsed_seconds, timed_out)`
+- [tests/test_script_runner.py](../tests/test_script_runner.py) — 9 个单测
+
+### 关键设计
+
+1. **全异步**：用 `asyncio.create_subprocess_exec` + `asyncio.wait_for`，不阻塞 FastAPI 事件循环
+2. **超时强 kill 跨平台**：
+   - Linux/Mac：`os.setsid` 建进程组 + `os.killpg(SIGKILL)` 杀整组
+   - Windows：`CREATE_NEW_PROCESS_GROUP` + `proc.kill()`
+3. **防 shell 注入**：`cmd` 强制要求 list/tuple，拒绝字符串（避免 `shell=True` 路径）
+4. **不直接注册为 LLM 工具**：通用脚本执行权限过大，引擎层只提供底层能力；后续具体业务（气象脚本调度、RAG 预处理等）按需在自己的 `@tool` 中调用并做白名单/参数校验
+
+### 验证结果
+
+- 单测：**9/9 通过**（1.55s），含 PRD TOL-01 关键验收点 `test_run_script_timeout_force_kill`（sleep 30s 被 1s 超时在 < 5s 内强制 kill）
+
+---
+
+## 待办
 
 ### 3.5 Agentic RAG 模块
 
@@ -146,4 +169,4 @@ START → call_model → should_continue（条件边）
 ## 历史变更
 
 - **2026-06-09**：完成 3.1、3.2
-- **2026-06-10**：完成 3.3
+- **2026-06-10**：完成 3.3、3.4

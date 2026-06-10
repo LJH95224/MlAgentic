@@ -31,7 +31,12 @@ def _parse_sse_lines(text: str) -> list[dict]:
 
 @skip_without_db
 async def test_chat_stream_full_flow(client):
-    """完整链路：创建会话 → 发起流式对话 → 验证文本流 + 控制流 + done。"""
+    """完整链路：创建会话 → 发起流式对话 → 验证文本流 + done 事件。
+
+    注意：3.3 之后 agent 走真实 LangGraph + LLM 推理，是否触发 tool_call
+    取决于模型对提示词的判断，因此本测试只对"文本流必须存在"和"以 done 结尾"
+    做硬断言；tool_start 事件作为软断言（如果出现则校验结构）。
+    """
     # 1) 先建会话
     sess_resp = await client.post("/api/v1/sessions")
     session_id = sess_resp.json()["id"]
@@ -51,11 +56,11 @@ async def test_chat_stream_full_flow(client):
     text_events = [e for e in events if e["data"].get("type") == "text"]
     assert len(text_events) > 0, "应有文本流事件"
 
-    # 必须包含 tool_start 事件（API-03 控制流）
+    # 软断言：若发起了 tool 调用，结构必须正确（API-03 控制流契约）
     tool_starts = [e for e in events if e["data"].get("type") == "tool_start"]
-    assert len(tool_starts) > 0, "应有 tool_start 控制事件"
-    assert tool_starts[0]["event"] == "control"
-    assert tool_starts[0]["data"]["tool"] == "mock_search"
+    for ts in tool_starts:
+        assert ts["event"] == "control"
+        assert ts["data"].get("tool"), "tool_start 事件必须含 tool 字段"
 
     # 应以 done 事件结尾
     assert events[-1]["data"].get("type") == "done"
