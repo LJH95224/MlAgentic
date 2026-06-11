@@ -25,7 +25,8 @@ from app.models.base import Base
 from app.rag import close_milvus, init_milvus
 
 # 必须导入模型才能让 Base.metadata 感知到它们
-from app.models import ChatMessage, ChatSession  # noqa: F401
+# V1.5：新增 KnowledgeBase / KbFile 两张表（PRD §5.2、§5.3）
+from app.models import ChatMessage, ChatSession, KbFile, KnowledgeBase  # noqa: F401
 
 logger = logging.getLogger(__name__)
 

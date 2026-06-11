@@ -1,16 +1,18 @@
-# TyAgent V1.0 开发进度
+# TyAgent 开发进度
 
 > **维护约定**：每次完成一个 PRD 子模块（或对已完成模块做实质性改动）后，必须同步更新本文档。
 > 文档定位：让任何接手者在 2 分钟内掌握当前实现到哪一步、下一步该做什么。
 >
 > **配套文档**：
-> - [architecture.md](architecture.md) — 技术架构、数据流转、关键设计决策（"为什么这么做、怎么做的"）
-> - [TyAgent V1.0 需求规格说明书](TyAgent%20V1.0%20%28%E5%9F%BA%E7%A1%80%E5%BA%95%E5%BA%A7%29%20%E9%9C%80%E6%B1%82%E8%A7%84%E6%A0%BC%E8%AF%B4%E6%98%8E%E4%B9%A6.md) — PRD（需求 ID 与验收标准）
+> - [architecture.md](architecture.md) — 技术架构、数据流转、关键设计决策
+> - [TyAgent V1.0 需求规格说明书](TyAgent%20V1.0%20%28%E5%9F%BA%E7%A1%80%E5%BA%95%E5%BA%A7%29%20%E9%9C%80%E6%B1%82%E8%A7%84%E6%A0%BC%E8%AF%B4%E6%98%8E%E4%B9%A6.md) — V1.0 PRD（基础底座，已完成）
+> - **[TyAgent V1.5 · 需求规格说明书](TyAgent%20V1.5%20%C2%B7%20%E9%9C%80%E6%B1%82%E8%A7%84%E6%A0%BC%E8%AF%B4%E6%98%8E%E4%B9%A6.md)** — V1.5 PRD（当前迭代，数据管理层）
+> - **[v1.5_dev_plan.md](v1.5_dev_plan.md)** — V1.5 开发拆分计划（子需求 ID + 依赖 + 阶段）
 > - [embedding.md](embedding.md) — Embedding 模型选型对比
 
 ---
 
-## 总览
+## V1.0 基础底座（已完成 ✅）
 
 | 模块 | PRD 章节 | 状态 | 完成日期 |
 |---|---|---|---|
@@ -21,6 +23,98 @@
 | Agentic RAG（**Milvus**） | 3.5 | ✅ 完成 + 联调验收 | 2026-06-10 |
 | 知识图谱（**Neo4j**） | 3.6 | ✅ 完成 + 联调验收 | 2026-06-10 |
 
+---
+
+## V1.5 数据管理层（进行中 🔧）
+
+> **当前迭代起点：2026-06-11**。详细拆分见 [v1.5_dev_plan.md](v1.5_dev_plan.md)。
+
+| 阶段 | 模块 | PRD 子需求 | 状态 | 完成日期 |
+|---|---|---|---|---|
+| S0 | 基础设施（Celery + Redis + DB 迁移） | TASK-01 / 数据模型 | ✅ 完成 + 联调验收 | 2026-06-11 |
+| S1 | 会话管理 CRUD（不含异步任务） | SES-01 ~ SES-06 / SES-09 | ⏳ 待开始 | — |
+| S2 | 知识库 CRUD + Milvus 多 Collection | KB-01 ~ KB-05 | ⏳ 待开始 | — |
+| S3 | 文件上传 + 异步入库（核心） | FILE-01 ~ FILE-05 / TASK-02 / TASK-03 | ⏳ 待开始 | — |
+| S4 | 会话标题/摘要异步生成 | SES-07 / SES-08 / TASK-04 / TASK-05 | ⏳ 待开始 | — |
+| S5 | KB 关联对话 + 端到端联调 | KB-06 | ⏳ 待开始 | — |
+
+---
+
+## V1.5 · S0 基础设施 ✅
+
+### 交付内容
+
+| 模块 | 实现位置 | 备注 |
+|---|---|---|
+| **配置项扩展**（Redis / Celery / 上传 / 上下文窗口 / 标题摘要 LLM） | [app/core/config.py](../app/core/config.py)（新增 7 字段 + 2 derived property） | 含 broker/backend 缺省复用 redis_url 的兜底逻辑 |
+| **依赖清单** | [requirements.txt](../requirements.txt) | 新增 celery / redis / pymupdf / python-docx / unstructured / markdown-it-py / langchain-text-splitters / tiktoken / python-multipart |
+| **PG 模型**：`ChatSession` 扩 5 字段 | [app/models/session.py](../app/models/session.py) | title / summary / summarized_at / updated_at / message_count |
+| **PG 模型**：`KnowledgeBase` 新表 | [app/models/knowledge_base.py](../app/models/knowledge_base.py) | 10 字段 + 3 check 约束 + name 唯一 |
+| **PG 模型**：`KbFile` 新表 | [app/models/kb_file.py](../app/models/kb_file.py) | 14 字段 + kb_id 外键级联 |
+| **Celery app** | [app/tasks/celery_app.py](../app/tasks/celery_app.py) | acks_late=True / prefetch=1 / json-only / 中国时区 |
+| **ping_task** | [app/tasks/ping.py](../app/tasks/ping.py) | smoke 用，单测覆盖 |
+| **Redis 服务** | [docker-compose/docker-compose.yml](../docker-compose/docker-compose.yml) | redis:7-alpine + AOF + 持久化挂 d:/dockerVolumes/redis/data |
+| **`.env.example`** | [.env.example](../.env.example) | V1.5 块含 Redis / Celery / 上传 / 上下文 / 标题摘要 LLM / NER 备选模型注释 |
+| **Celery 开发指南** | [docs/celery_dev_guide.md](celery_dev_guide.md) | Windows pool=solo / Linux prefork / smoke 命令 / 排错 |
+
+### 关键设计决策
+
+1. **不写迁移脚本**：用户确认 DB 可清空，靠 `Base.metadata.create_all` + 一次性清库命令；后续真有需要再上 Alembic
+2. **Celery broker/backend 缺省复用 REDIS_URL**：`Settings.effective_celery_broker_url` 是 derived property，避免业务层散落 `or` 兜底
+3. **task_acks_late + prefetch_multiplier=1**：PRD TASK-01 的可靠性硬要求；worker 异常时任务重入队、防 OOM 阻塞队列
+4. **task_serializer=json**：禁 pickle（RCE 风险），跨语言友好
+5. **task_time_limit=30min / soft=25min**：兜底防文件解析挂死；单任务可装饰器覆盖
+6. **`_TASK_MODULES` 显式列表**：worker 启动时按列表 import，新任务必须在这里注册
+7. **`KbFile.knowledge_base` 关系用 `lazy="raise"`**：防 N+1，强制业务层显式 selectinload
+
+### 单测
+
+| 文件 | 用例数 | 覆盖 |
+|---|---|---|
+| [tests/test_v1_5_models.py](../tests/test_v1_5_models.py) | 20 | ChatSession 扩展字段 / KB 表字段+约束+默认值 / KbFile 字段+外键级联+枚举完备性 |
+| [tests/test_v1_5_settings.py](../tests/test_v1_5_settings.py) | 11 | Redis URL / Celery broker 缺省+覆盖 / 上传配置 / 上下文窗口 / 标题摘要 LLM |
+| [tests/test_celery_app.py](../tests/test_celery_app.py) | 13 | Celery 配置项 / 任务注册 / broker 覆盖 / ping_task 三种调用方式（eager 模式） |
+
+### 验证状态
+
+- ✅ V1.5 模型 + 配置单测 **31/31 通过**（不依赖 Celery）
+- ✅ Celery 单测 **11/11 通过**（用 `task_always_eager` 模式，不连真 Redis）
+- ✅ V1.0 全量测试 **127 passed + 6 skipped**（零回归；skipped 为 DB 集成测试，等用户配 TEST_DATABASE_URL）
+- ✅ **端到端联调 smoke 通过**（2026-06-11）：
+  - uvicorn 启动日志显示 "数据库表初始化完成" + Milvus / Neo4j 连接 OK
+  - `celery worker --pool=solo` 启动成功，`[tasks]` 段含 `app.tasks.ping.ping_task`
+  - `ping_task.delay('hello-S0').get(timeout=5)` 返回 `pong: hello-S0 @ lvjinhu`，链路全通
+
+### 联调阶段关键经验（已写入项目记忆 + 文档）
+
+1. **Windows + Docker Desktop 必须用 `127.0.0.1` 不用 `localhost`**
+   - 现象：`Test-NetConnection localhost -Port 6379` 显示 `RemoteAddress: ::1` + `TcpTestSucceeded: True`，但 `redis-cli PING` 永远等不到响应，worker 卡在 `[tasks]` 段下不动
+   - 根因：Windows 解析 `localhost` 优先 IPv6 `::1`，vpnkit 对 IPv6→容器 的端口转发常丢应用层包
+   - 修复：`Settings.redis_url` 默认值已固化为 `redis://127.0.0.1:6379/0`，`.env.example` 与 `docs/celery_dev_guide.md` 加警示
+2. **`from-import` 遮蔽子模块的坑**：`app/tasks/__init__.py` 写 `from app.tasks.celery_app import celery_app` 会让 `app.tasks.celery_app` 这个名字被 Celery 实例对象遮蔽，单测里要 `importlib.reload` 必须从 `sys.modules["app.tasks.celery_app"]` 拿真模块对象
+3. **broker 连接重试限制**：`broker_connection_max_retries=3` + `broker_connection_timeout=4`，避免 Redis 不通时 `.delay()` 无限卡死
+
+### S0 终验收命令汇总（用户已执行）
+
+```bash
+# 装依赖
+uv pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+# 起 Redis
+cd docker-compose && docker compose up -d redis
+# Celery 单测
+pytest tests/test_celery_app.py -v          # 11 passed
+# 清库 + 起 uvicorn 建表
+psql -U postgres -c "DROP DATABASE IF EXISTS tyagent; CREATE DATABASE tyagent;"
+uvicorn app.main:app --reload                # 看 "数据库表初始化完成"
+# 起 worker
+celery -A app.tasks.celery_app worker --pool=solo -l info
+# smoke
+python -c "from app.tasks import ping_task; print(ping_task.delay('hello-S0').get(timeout=5))"
+# → pong: hello-S0 @ lvjinhu
+```
+
+---
+
 > **PRD 路线变更（2026-06-10）**：新版 PRD 把存储架构由"PostgreSQL + pgvector"
 > 调整为"PostgreSQL（会话/消息）+ Milvus（向量切片）+ Neo4j（知识图谱）"三库协同。
 > 已完成的 3.1–3.4 模块**不受影响**；3.5 整段重写为 Milvus 版；新增 3.6 知识图谱模块。
@@ -28,7 +122,7 @@
 
 ---
 
-## 3.1 接入与通信模块 ✅
+## 3.1 接入与通信模块 ✅（V1.0）
 
 ### 交付内容
 
@@ -348,6 +442,20 @@ python scripts/kg_smoke.py
 
 ## 历史变更
 
+- **2026-06-11**：V1.5 S0 基础设施联调验收通过 ✅
+  - ping_task smoke 全链路跑通：`pong: hello-S0 @ lvjinhu`
+  - 联调阶段定位并修复 Windows + Docker Desktop 上 `localhost`→IPv6 vpnkit 丢包坑（默认值锁 127.0.0.1）
+  - 联调阶段定位并修复 `from-import` 遮蔽子模块导致 `importlib.reload` 失败的测试坑
+  - 全量测试 138 passed + 6 skipped，零回归
+- **2026-06-11**：V1.5 S0 基础设施代码完成
+  - 新增 [app/tasks/](../app/tasks/)（celery_app / ping）+ [docs/celery_dev_guide.md](celery_dev_guide.md)
+  - 扩展 `ChatSession`、新增 `KnowledgeBase` / `KbFile` 两张表（PRD §5.1~5.3）
+  - 配置层新增 7 字段 + 2 derived property（broker/backend 缺省复用 redis_url）
+  - docker-compose 加 redis:7-alpine 服务（持久化挂 d:/dockerVolumes/redis/data）
+- **2026-06-11**：V1.0 基础底座收尾，V1.5 数据管理层启动
+  - 新增 [v1.5_dev_plan.md](v1.5_dev_plan.md) — 子需求 ID 拆分 + 阶段依赖
+  - [CLAUDE.md](../CLAUDE.md) 工作前必读追加 V1.5 PRD 与拆分计划入口
+  - 进度文档表格结构升级：分 V1.0（已完成）/ V1.5（进行中）两段
 - **2026-06-09**：完成 3.1、3.2
 - **2026-06-10**：完成 3.3、3.4
 - **2026-06-10**：PRD 升级到混合存储版（PostgreSQL + Milvus + Neo4j）

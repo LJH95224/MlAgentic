@@ -1,9 +1,14 @@
-# TyAgent V1.0 技术文档
+# TyAgent 技术文档
 
 > **文档定位**：描述项目当前已实现部分的**技术架构、数据流转、关键技术细节**，供后续接手者快速建立全局认知。
 > **维护约定**：每次完成 PRD 模块或对已完成部分做实质性改动后，必须同步更新本文档。本文档与 [progress.md](progress.md) 互补 ——
 > - progress.md：模块完成度 + 文件清单 + 验收记录（"做到哪了"）
 > - 本文档：架构原理 + 技术决策 + 关键实现（"为什么这么做、怎么做的"）
+>
+> **版本演进**：
+> - 第 1~12 章 = **V1.0 基础底座**（已完成，本节内容随 V1.0 联调通过后定稿）
+> - 第 13 章 = **后续可改进点**（V1.0 阶段总结的技术债清单）
+> - 第 16 章及之后 = **V1.5 数据管理层增量**（按 S0~S5 阶段完成后追加）
 
 ---
 
@@ -726,3 +731,182 @@ PG create_all → init_milvus()（同步）→ await init_neo4j()（异步）
 5. **联调中发现的"坑"** → 补到第 12 章决策表的"理由"或第 13 章"已知限制"
 
 > 这份文档不是写完就完事的，而是与代码同步演进的"活文档"。
+
+---
+
+# 第二部分 · V1.5 数据管理层增量
+
+> **追加规则**：每完成一个 V1.5 阶段（S0~S5），把对应章节填实；未完成阶段保留占位 + "⏳ 待填写"。
+> 同时刷新 [progress.md](progress.md) 的阶段表与本文档的章节状态。
+
+## 16. V1.5 概览
+
+**目标**：在 V1.0 ReAct 底座之上构建面向用户和运营的**数据管理层**，把系统从"能跑通"升级为"可用、可管理"。
+
+**新增三条主线**：
+- 会话生命周期管理（标题、摘要、CRUD、消息历史游标翻页）
+- 多知识库空间（每库独立 Milvus Collection、Neo4j `kb_id` 隔离子图）
+- 文件上传 + 异步入库管道（Celery 异步、轮询进度）
+
+**新增技术栈**：
+
+| 层 | 选型 | 用途 |
+|---|---|---|
+| 异步任务队列 | **Celery 5 + Redis 7** | 文件解析入库、会话标题/摘要异步生成 |
+| 文件存储 | 本地磁盘 `{UPLOAD_DIR}/{kb_id}/{file_id}/` | V1.5 简易方案，后期可换 OSS |
+| 文档解析 | **PyMuPDF / python-docx / Unstructured / markdown-it-py** | 多格式 → 纯文本 |
+| 文本切片 | **LangChain RecursiveCharacterTextSplitter + tiktoken** | 按 KB 配置的 chunk_size / chunk_overlap 切 |
+
+**统一响应格式（D4 全覆盖）**：V1.0 + V1.5 所有 REST 接口包成 `{code, message, data}`；SSE 报文沿用 V1.0 协议（`event/type/...`）不再二次包装。
+
+详细拆分见 [v1.5_dev_plan.md](v1.5_dev_plan.md)。
+
+## 17. S0 基础设施 ✅（2026-06-11）
+
+### 17.1 异步任务架构
+
+```
+┌───────────────┐    enqueue (msgpack-free, JSON only)    ┌──────────────┐    consume    ┌──────────────┐
+│ FastAPI app   │ ──────────────────────────────────────▶ │   Redis 7    │ ─────────────▶│ Celery Worker │
+│ (HTTP 接入)    │                                          │ broker+result │               │ pool=solo (W) │
+└───────────────┘                                          └──────────────┘               │ prefork  (L)  │
+                                                                  ▲                       └──────────────┘
+                                                                  │  poll result                 │
+                                                                  └──────────────────────────────┘
+```
+
+- **生产者**：FastAPI 进程调 `task.delay()` 把任务写进 Redis
+- **broker / backend**：同一个 Redis 实例（broker = 任务队列；backend = 结果存储）
+- **消费者**：独立 Python 进程（`celery worker`），Windows 开发用 `--pool=solo`，Linux 生产用 `--pool=prefork`
+- 三者**完全解耦**：worker 挂了不影响 FastAPI 收请求，只是任务堆积在 Redis；FastAPI 挂了 worker 也能继续消化在途任务
+
+### 17.2 Celery 配置定型（[app/tasks/celery_app.py](../app/tasks/celery_app.py)）
+
+| 配置项 | 取值 | 作用 |
+|---|---|---|
+| `task_acks_late` | `True` | Worker 异常时任务可重新入队，保证至少一次执行（PRD TASK-01 硬要求）|
+| `worker_prefetch_multiplier` | `1` | 防 OOM 场景下多任务并发阻塞队列（PRD TASK-01 硬要求）|
+| `task_serializer / result_serializer / accept_content` | `json` only | 禁 pickle，避免 RCE 风险 |
+| `timezone` | `Asia/Shanghai` + `enable_utc=False` | 日志对时直观 |
+| `result_expires` | 86400 秒 | 任务结果保留 24h，足够前端 2s 轮询 |
+| `task_time_limit / soft_time_limit` | 30min / 25min | 兜底防文件解析挂死 |
+| `broker_connection_max_retries` | 3 | Redis 不通时 `.delay()` 最多重试 3 次，避免无限卡死 |
+| `broker_connection_timeout` | 4s | 单次连接超时 |
+
+### 17.3 任务注册机制
+
+`app/tasks/celery_app.py::_TASK_MODULES` 是显式列表：
+
+```python
+_TASK_MODULES = [
+    "app.tasks.ping",
+    # S3 阶段追加：app.tasks.ingest_task
+    # S4 阶段追加：app.tasks.session_task
+]
+```
+
+worker 启动时按列表 import 各模块，触发 `@celery_app.task` 装饰器完成任务注册。新增任务**必须在这里追加**，否则 worker 不会发现它。
+
+### 17.4 PostgreSQL 新表结构
+
+#### `chat_sessions` 扩展（PRD §5.1）
+
+V1.0 字段：`id` / `created_at` / `metadata`
+V1.5 新增：
+
+| 字段 | 类型 | 默认 | 用途 |
+|---|---|---|---|
+| `title` | VARCHAR(100) | NULL | 异步任务自动生成（SES-07） |
+| `summary` | TEXT | NULL | `/summarize` 接口触发（SES-08） |
+| `summarized_at` | TIMESTAMPTZ | NULL | 最近一次摘要生成时间 |
+| `updated_at` | TIMESTAMPTZ | NOW() + onupdate | 写消息时自动刷新 |
+| `message_count` | INTEGER | 0 | 冗余计数，提升 SES-02 列表性能 |
+
+#### `knowledge_bases` 新表（PRD §5.2）
+
+10 字段 + 3 个 check 约束：
+
+- `id` UUID PK
+- `name` VARCHAR(128) **UNIQUE NOT NULL** + INDEX
+- `description` TEXT NULL
+- `embedding_dim` INT DEFAULT 4096（**创建后不可改**，业务层 PATCH 接口拦截）
+- `chunk_size` INT DEFAULT 512（check: 128~2048）
+- `chunk_overlap` INT DEFAULT 64（check: ≥0；业务层加额外 `< chunk_size/2` 校验）
+- `status` VARCHAR(20) DEFAULT 'active'（active/building/error）
+- `file_count` INT DEFAULT 0（冗余）
+- `chunk_count` INT DEFAULT 0（冗余）
+- `created_at` TIMESTAMPTZ DEFAULT NOW()
+
+#### `kb_files` 新表（PRD §5.3）
+
+14 字段，`kb_id` 外键级联：
+
+- `id` UUID PK（同时作为 `document_id` 写 Milvus / Neo4j）
+- `kb_id` UUID FK → `knowledge_bases.id` **ON DELETE CASCADE**
+- `filename` VARCHAR(512)、`file_path` VARCHAR(1024)、`mime_type` VARCHAR(128)
+- `file_size` BIGINT
+- `status` VARCHAR(20) DEFAULT 'pending' + INDEX（pending/processing/completed/failed）
+- `progress` INT DEFAULT 0（0-100，对应 FILE-03 各阶段）
+- `chunk_count` / `entity_count` INT DEFAULT 0
+- `error_message` TEXT NULL（failed 时填）
+- `celery_task_id` VARCHAR(255) NULL（删除时 revoke 用）
+- `created_at` / `completed_at` TIMESTAMPTZ
+- `knowledge_base` relationship `lazy="raise"`（强制显式 selectinload，防 N+1）
+
+### 17.5 关键设计决策
+
+1. **不写迁移脚本（用户确认数据库可清空）**：靠 `Base.metadata.create_all` + 首次启动前手动 `DROP DATABASE; CREATE DATABASE`。后续真需要复杂迁移再上 Alembic
+2. **Celery broker/backend 缺省复用 REDIS_URL**：`Settings.effective_celery_broker_url` 是 derived property，避免业务层散落 `or` 兜底
+3. **Windows `127.0.0.1` 锁死**：`Settings.redis_url` 默认 `redis://127.0.0.1:6379/0`，避免 Docker Desktop vpnkit IPv6 转发丢包坑（联调阶段踩到，文档已记）
+4. **`from-import` 遮蔽子模块**：`app/tasks/__init__.py` 用 `from app.tasks.celery_app import celery_app` 后，子模块对象被同名 Celery 实例覆盖；测试里 `importlib.reload` 必须从 `sys.modules["app.tasks.celery_app"]` 取真模块对象
+5. **broker 连接限重试 3 次**：`broker_connection_max_retries=3` + `broker_connection_timeout=4`，避免 Redis 不通时 `.delay()` 无限卡死，秒级报错给上层
+6. **`KbFile.knowledge_base` 关系用 `lazy="raise"`**：强制业务层显式 selectinload，防 N+1 在列表查询中暴露
+
+### 17.6 docker-compose 新增
+
+```yaml
+redis:
+  image: redis:7-alpine
+  command: ["redis-server", "--appendonly", "yes", "--save", "60", "1"]
+  ports: ["6379:6379"]
+  volumes: ["d:/dockerVolumes/redis/data:/data"]   # AOF 持久化
+```
+
+与现有 milvus / neo4j 并列，统一 `d:/dockerVolumes/` 卷目录约定。
+
+## 18. S1 会话管理 · ⏳ 待填写
+
+完成后填入：
+- 统一响应 `ApiResponse` 设计 + 异常处理器映射表
+- SES-09 上下文窗口裁剪策略实测效果
+- 游标翻页 SQL 最终形态
+
+## 19. S2 知识库管理 · ⏳ 待填写
+
+完成后填入：
+- Collection 命名规则 `kb_{hex}` 落地代码位置
+- KB-05 删除回滚策略实测结果
+- Milvus Schema 扩展字段 `kb_id` 的取值实例
+- Neo4j `kb_id` 属性的索引/查询性能
+
+## 20. S3 文件上传与异步入库 · ⏳ 待填写
+
+完成后填入：
+- 文件入库管道完整时序图（progress 0→100）
+- 解析器分发表与每种格式的踩坑记录
+- Celery 任务幂等性与重试策略实测
+- NER 软失败实测案例
+
+## 21. S4 会话标题与摘要 · ⏳ 待填写
+
+完成后填入：
+- 触发时机判定逻辑
+- Prompt 最终形态
+- 长摘要 map-reduce 策略（若需要）
+
+## 22. S5 KB 关联对话 · ⏳ 待填写
+
+完成后填入：
+- `kb_ids` 跨 Collection 合并重排序的代码位置与性能基线
+- 端到端 smoke 脚本走通的完整链路
+- V1.5 整体验收结论

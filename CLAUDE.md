@@ -7,8 +7,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 **任何编码任务开始前，必须按此顺序阅读**：
 
 1. [docs/progress.md](docs/progress.md) —— **当前进度文档**：了解项目实现到哪一步、各模块状态、关键文件位置、待办清单。
-2. [docs/GeoAgent V1.0 (基础底座) 需求规格说明书.md](docs/GeoAgent%20V1.0%20%28%E5%9F%BA%E7%A1%80%E5%BA%95%E5%BA%A7%29%20%E9%9C%80%E6%B1%82%E8%A7%84%E6%A0%BC%E8%AF%B4%E6%98%8E%E4%B9%A6.md) —— **需求文档（PRD）**：项目目标、技术栈强制要求、需求 ID 与验收标准。
-3. [environment_guide_zh.md](environment_guide_zh.md) —— Conda + uv 混合环境管理规范。
+2. **当前迭代 PRD（V1.5，进行中）**：[docs/TyAgent V1.5 · 需求规格说明书.md](docs/TyAgent%20V1.5%20%C2%B7%20%E9%9C%80%E6%B1%82%E8%A7%84%E6%A0%BC%E8%AF%B4%E6%98%8E%E4%B9%A6.md) —— 会话/知识库/文件管理 + 异步任务全链路。
+3. **基线 PRD（V1.0，已完成）**：[docs/GeoAgent V1.0 (基础底座) 需求规格说明书.md](docs/GeoAgent%20V1.0%20%28%E5%9F%BA%E7%A1%80%E5%BA%95%E5%BA%A7%29%20%E9%9C%80%E6%B1%82%E8%A7%84%E6%A0%BC%E8%AF%B4%E6%98%8E%E4%B9%A6.md) —— ReAct Agent 基础底座（已 100% 通过）。
+4. **V1.5 开发拆分计划**：[docs/v1.5_dev_plan.md](docs/v1.5_dev_plan.md) —— 按 SES/KB/FILE/TASK 子需求 ID 拆分的实施步骤与依赖关系。
+5. [environment_guide_zh.md](environment_guide_zh.md) —— Conda + uv 混合环境管理规范。
 
 **任何模块完成（或对已完成模块做实质性改动）后，必须同步更新 [docs/progress.md](docs/progress.md)**：
 - 把对应模块状态改为 ✅，填入完成日期
@@ -20,19 +22,24 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目定位
 
-**TyAgent / GeoAgent V1.0** —— 一个面向气象空间智能的 Agent 后端引擎基础底座。后续开发须围绕 PRD 推进；当前进度参见 [docs/progress.md](docs/progress.md)。
+**TyAgent / GeoAgent** —— 面向气象空间智能的 Agent 后端引擎。
+
+- **V1.0（基础底座，已完成）**：ReAct Agent + Agentic RAG（Milvus）+ Graph RAG（Neo4j），10 条验收项全过。
+- **V1.5（当前迭代）**：在底座之上构建**数据管理层** —— 会话生命周期、多知识库空间、文件上传异步入库、Celery 任务队列。详见 [docs/v1.5_dev_plan.md](docs/v1.5_dev_plan.md)。
 
 ## 目标技术栈（PRD 强制）
 
 | 层 | 选型 |
 | --- | --- |
 | Web 框架 | **FastAPI**（异步、SSE 流式输出） |
-| Agent 编排 | **LangGraph**（ReAct 状态机，需实现 `Thought → Action → Observation` 循环） |
-| 模型网关 | **LiteLLM**（统一 OpenAI 规范，支持 DeepSeek/Qwen/GLM 等切换，仅靠 `.env` 配置） |
-| 存储 | **PostgreSQL（会话/消息）+ Milvus（向量切片）+ Neo4j（知识图谱）** 三库协同 |
-| 通信 | **Server-Sent Events (SSE)**，需区分「文本流」与「控制流」（如 `{"type":"tool_start","tool":"search"}`） |
+| Agent 编排 | **LangGraph**（ReAct 状态机，`Thought → Action → Observation` 循环） |
+| 模型网关 | **LiteLLM**（统一 OpenAI 规范，DeepSeek/Qwen/GLM 等仅靠 `.env` 切换） |
+| 存储 | **PostgreSQL（会话/消息/知识库/文件元数据）+ Milvus（向量切片，按 KB 隔离 Collection）+ Neo4j（知识图谱，按 kb_id 隔离子图）** |
+| 异步队列 | **Celery 5 + Redis 7**（V1.5 新增；文件解析入库 / 标题摘要生成） |
+| 文档解析 | **PyMuPDF + python-docx + Unstructured + LangChain TextSplitter**（V1.5 新增） |
+| 通信 | **Server-Sent Events (SSE)**，区分「文本流」与「控制流」 |
 
-V1.0 **明确不做**：Docker 动态沙盒、外部 MCP 接口、前端 WebGIS（Cesium/OpenLayers）联动渲染。脚本执行使用 `subprocess.run` 子进程模式，**必须设置超时**（建议 30s）。
+**明确不做**：Docker 动态沙盒、外部 MCP、前端 WebGIS、用户认证（JWT/RBAC，V1.5 预留 `allowed_roles` 但不激活）、嵌入模型微调或更换、实时协同编辑。脚本执行用 `subprocess.run` 子进程模式，**必须设置超时**（建议 30s）。
 
 ## 关键架构约束
 

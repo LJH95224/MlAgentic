@@ -1,5 +1,5 @@
 # ============================================================
-# TyAgent / GeoAgent V1.0 - Python 依赖清单
+# TyAgent / GeoAgent - Python 依赖清单
 # 安装方式（务必使用 uv，禁用裸 pip；走清华镜像加速）：
 #   uv pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 # ============================================================
@@ -8,13 +8,15 @@
 fastapi>=0.115.0
 uvicorn[standard]>=0.32.0
 sse-starlette>=2.1.3
+# V1.5：FastAPI multipart 文件上传必需
+python-multipart>=0.0.9
 
 # --- 配置与数据校验 ---
 pydantic>=2.9.0
 pydantic-settings>=2.5.0
 python-dotenv>=1.0.1
 
-# --- 数据库（SQLAlchemy 2.0 async + asyncpg；PostgreSQL 仅存会话/消息） ---
+# --- 数据库（SQLAlchemy 2.0 async + asyncpg；PostgreSQL 仅存会话/消息/知识库元数据） ---
 sqlalchemy[asyncio]>=2.0.35
 asyncpg>=0.29.0
 
@@ -39,3 +41,28 @@ litellm>=1.50.0
 langgraph>=0.2.30
 langchain-core>=0.3.0
 langchain-openai>=0.2.0
+
+# ============================================================
+# V1.5 新增（数据管理层 · 2026-06-11 起）
+# ============================================================
+
+# --- 异步任务队列（TASK-01）---
+celery>=5.4.0
+redis>=5.0.0
+
+# --- 文件解析（FILE-01 / TASK-02）---
+# PyMuPDF：PDF 解析（fitz）
+pymupdf>=1.24.0
+# python-docx：Word docx 解析
+python-docx>=1.1.0
+# Unstructured：多格式兜底（V1.5 主要靠它清洗 docx/markdown 复杂结构）
+unstructured>=0.15.0
+# markdown 解析（剥语法符号）
+markdown-it-py>=3.0.0
+
+# --- 文本切片（FILE-01 / TASK-02）---
+# RecursiveCharacterTextSplitter
+langchain-text-splitters>=0.3.0
+# token 长度估算（中文场景按 char/token≈1.5~2 折算）
+tiktoken>=0.8.0
+

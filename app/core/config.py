@@ -85,6 +85,46 @@ class Settings(BaseSettings):
     # 想用更便宜的轻量模型做 NER 时，可独立指定
     kg_ner_model: str | None = Field(default=None, alias="KG_NER_MODEL")
 
+    # ============================================================
+    # V1.5 新增（数据管理层 · 2026-06-11 起启用）
+    # ============================================================
+
+    # --- Redis（Celery broker / backend，TASK-01） ---
+    # 默认走本地 docker-compose 起的 redis:7-alpine
+    # 注意：Windows + Docker Desktop 上，localhost 会优先解析成 IPv6 (::1)，
+    # vpnkit 对 IPv6→容器 的转发经常丢应用层数据（TCP 握手成功但读超时），
+    # 所以默认值强制用 127.0.0.1 走 IPv4，规避此坑
+    redis_url: str = Field(default="redis://127.0.0.1:6379/0", alias="REDIS_URL")
+
+    # --- Celery broker / backend 显式覆盖；留空则复用 redis_url ---
+    celery_broker_url: str | None = Field(default=None, alias="CELERY_BROKER_URL")
+    celery_result_backend: str | None = Field(default=None, alias="CELERY_RESULT_BACKEND")
+
+    # --- 文件上传（FILE-01 ~ FILE-05） ---
+    # 原始文件磁盘存储根目录，按 {kb_id}/{file_id}/ 分层
+    upload_dir: str = Field(default="./uploads", alias="UPLOAD_DIR")
+    # 单文件大小上限（MB），超出返 413（PRD §7.2）
+    max_file_size_mb: int = Field(default=50, alias="MAX_FILE_SIZE_MB")
+
+    # --- 会话上下文窗口（SES-09） ---
+    # 从 chat_messages 加载多少条历史进入 LangGraph；system 必含、不计数
+    context_window_messages: int = Field(default=20, alias="CONTEXT_WINDOW_MESSAGES")
+
+    # --- 异步任务用的标题 / 摘要 LLM（SES-07 / SES-08 / TASK-04 / TASK-05） ---
+    # 留空 → 复用主对话 LITELLM_MODEL；显式配置以便独立切轻量模型对比成本
+    session_title_model: str | None = Field(default=None, alias="SESSION_TITLE_MODEL")
+    session_summary_model: str | None = Field(default=None, alias="SESSION_SUMMARY_MODEL")
+
+    @property
+    def effective_celery_broker_url(self) -> str:
+        """返回实际生效的 Celery broker，缺省复用 REDIS_URL。"""
+        return self.celery_broker_url or self.redis_url
+
+    @property
+    def effective_celery_result_backend(self) -> str:
+        """返回实际生效的 Celery result backend，缺省复用 REDIS_URL。"""
+        return self.celery_result_backend or self.redis_url
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

@@ -103,6 +103,29 @@ services:
       timeout: 10s
       retries: 3
 
+  # ============================================================
+  # Redis 服务（V1.5 PRD §3.4 TASK-01 引入，Celery broker / backend）
+  # ------------------------------------------------------------
+  # 端口：6379 (Bolt)
+  # 镜像：redis:7-alpine（V1.5 PRD §2.1 指定 Redis 7）
+  # 持久化：appendonly yes + AOF；卷固定挂到 d:/dockerVolumes/redis/data
+  # 开发态无密码；生产部署务必加 --requirepass <strong>
+  # ============================================================
+  redis:
+    container_name: tyagent-redis
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--save", "60", "1"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - d:/dockerVolumes/redis/data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
 networks:
   default:
     name: milvus
