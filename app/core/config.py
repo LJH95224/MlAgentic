@@ -76,7 +76,8 @@ class Settings(BaseSettings):
     # --- Neo4j 知识图谱（3.6 阶段启用） ---
     # 默认账号与本仓库 docker-compose/docker-compose.yml 中 NEO4J_AUTH 对齐：
     #   neo4j / tyagent_neo4j
-    neo4j_uri: str = Field(default="bolt://localhost:7687", alias="NEO4J_URI")
+    # ⚠️ Windows 必须用 127.0.0.1（IPv6 vpnkit 转发坑，详见 docs/celery_dev_guide.md §5.1b）
+    neo4j_uri: str = Field(default="bolt://127.0.0.1:7687", alias="NEO4J_URI")
     neo4j_user: str = Field(default="neo4j", alias="NEO4J_USER")
     neo4j_password: str = Field(default="tyagent_neo4j", alias="NEO4J_PASSWORD")
     # 数据库名（社区版固定 "neo4j"）
@@ -86,6 +87,11 @@ class Settings(BaseSettings):
     # 留空则复用 LITELLM_MODEL / LITELLM_API_KEY / LITELLM_API_BASE
     # 想用更便宜的轻量模型做 NER 时，可独立指定
     kg_ner_model: str | None = Field(default=None, alias="KG_NER_MODEL")
+
+    # 跳过 NER 步骤（V1.5 S3 联调用：大文档场景下 LLM NER 极慢，先跳过验证管道
+    # 主链路；S5 之后再评估是否换本地 NER 引擎 / 完全砍掉）
+    # 设为 true 时，所有 chunk 的 entity_tags 写空数组，Neo4j 不写实体
+    skip_ner: bool = Field(default=False, alias="SKIP_NER")
 
     # ============================================================
     # V1.5 新增（数据管理层 · 2026-06-11 起启用）

@@ -31,8 +31,8 @@ _settings = get_settings()
 # 新增任务模块时记得在这里追加，否则 worker 不会发现它
 _TASK_MODULES: list[str] = [
     "app.tasks.ping",
-    # S3 阶段追加：
-    # "app.tasks.ingest_task",
+    # S3 阶段（2026-06-11 起）：文件入库管道
+    "app.tasks.ingest_task",
     # S4 阶段追加：
     # "app.tasks.session_task",
 ]

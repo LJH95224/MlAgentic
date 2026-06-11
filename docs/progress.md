@@ -34,7 +34,7 @@
 | S0 | 基础设施（Celery + Redis + DB 迁移） | TASK-01 / 数据模型 | ✅ 完成 + 联调验收 | 2026-06-11 |
 | S1 | 会话管理 CRUD（不含异步任务） | SES-01 ~ SES-06 / SES-09 | ✅ 完成 + 集成测试验收 | 2026-06-11 |
 | S2 | 知识库 CRUD + Milvus 多 Collection | KB-01 ~ KB-05 | ✅ 完成 + 集成测试验收 | 2026-06-11 |
-| S3 | 文件上传 + 异步入库（核心） | FILE-01 ~ FILE-05 / TASK-02 / TASK-03 | ⏳ 待开始 | — |
+| S3 | 文件上传 + 异步入库（核心） | FILE-01 ~ FILE-05 / TASK-02 / TASK-03 | ✅ 完成 + 端到端 smoke 验收 | 2026-06-11 |
 | S4 | 会话标题/摘要异步生成 | SES-07 / SES-08 / TASK-04 / TASK-05 | ⏳ 待开始 | — |
 | S5 | KB 关联对话 + 端到端联调 | KB-06 | ⏳ 待开始 | — |
 
@@ -442,6 +442,41 @@ python scripts/kg_smoke.py
 
 ## 历史变更
 
+- **2026-06-11**：V1.5 S3 阶段端到端 smoke 验收通过 ✅
+  - 真实气象论文 PDF 端到端跑通：56 chunks / 613 entities / 457 唯一实体 → Milvus + Neo4j 双库写入；删除后三库 + 磁盘全清；总耗时 ~60s
+  - PRD 用户 4 条需求 100% 验证：KB CRUD / 上传指定 KB / 文件增删查 / **删除时三库联动清理**
+  - 联调阶段补丁（已写代码注释 + 项目记忆）：
+    1. **NER 超时硬兜底**：litellm 默认 60s timeout 在大文档场景会让 `asyncio.gather` 被慢调用拖死整批；加 `wait_for(25s)` + NER 并发提到 8；超时按软失败原则返 `[]`
+    2. **实体名 UTF-8 字节截断**：Milvus VARCHAR `max_length` 是按字节算（不是字符），中文 22 字 = 66 字节超 `entity_tags(max_length=64)`；用 `_truncate_utf8()` 工具按 UTF-8 字节安全截断（已记 [[milvus-varchar-max-length-is-bytes]]）
+    3. **Windows Neo4j 用 127.0.0.1**：localhost 走 IPv6 vpnkit 转发不稳，60s 超时；与 Redis 同款坑，统一固化（已记 [[windows-redis-use-127-not-localhost]]）
+    4. **SKIP_NER 开关**：大文档场景 LLM NER 慢且贵，加配置开关支持快速验证主管道；Phase 2 评估是否换 HanLP/spaCy 本地 NER
+    5. **smoke 脚本超时调到 15min + 卡点告警**：单一 progress 阶段超 3min 无推进打 WARNING，方便定位
+  - 验证数据：本测 7 步全部 ✓，含磁盘清理 / Milvus collection drop / Neo4j 子图 DETACH DELETE 三联清理
+- **2026-06-11**：V1.5 S3.2 七步入库管道 + 三联清理链路完成（待用户跑 smoke 端到端验收）
+  - 新增 [app/tasks/_resources.py](../app/tasks/_resources.py)：每任务 PG/Milvus/Neo4j 现建现断（NullPool + 局部 client，规避 prefork fork 副作用）
+  - 重写 [app/tasks/ingest_task.py](../app/tasks/ingest_task.py)：async def _main 内按 PRD §3.4 七步推进（parse → split → embed → milvus_write → ner → neo4j_write → done），progress 锚点 20/35/60/80/90/95/100；NER 软失败 + Neo4j 软失败；TASK-03 重试策略（指数退避 30s/60s/120s，3 次用尽 → failed）+ 异常分类（ValueError/ParseError 不可重试；MilvusException/TimeoutError 可重试）
+  - 接通 [app/services/kb_file_service.py](../app/services/kb_file_service.py) FILE-04 真清理：Milvus 按 `document_id == file_id` 删；Neo4j 按 (document_id, kb_id) 复合匹配 DETACH DELETE Document（Entity 节点保持复用不删）
+  - 扩展 [app/services/kb_service.py](../app/services/kb_service.py) KB-05 三联清理：revoke 所有 processing 任务 → Milvus drop → Neo4j 子图 DETACH DELETE → PG → 磁盘目录清空
+  - 新增 [tests/test_ingest_task.py](../tests/test_ingest_task.py) **16 用例**（异常分类 / chunk_id 稳定性 / 七步管道 happy path / Neo4j 软失败 / Celery eager 路径）
+  - 新增 [tests/test_s3_cleanup.py](../tests/test_s3_cleanup.py) **16 用例**（FILE-04 Milvus/Neo4j 清理各分支 / KB-05 端到端顺序 / Milvus 失败短路）
+  - 新增 [scripts/v1_5_s3_smoke.py](../scripts/v1_5_s3_smoke.py)：用户手动跑的端到端 smoke（建 KB → 上传 PDF → 轮询 progress → 验 Milvus+Neo4j → 删文件 → 删 KB → 验三库清理干净）
+  - mock 全量回归 **368 passed**，零回归（336 → 368）
+- **2026-06-11**：V1.5 S3.1 文件上传 endpoint（FILE-01~05）完成
+  - 新增 [app/schemas/kb_file.py](../app/schemas/kb_file.py)（FileListItem / FileDetail / FileListResponse）
+  - 新增 [app/services/kb_file_service.py](../app/services/kb_file_service.py)：upload / list / get / delete / reindex；含磁盘边读边量 + 防 Content-Length 欺骗 + KB 冗余计数维护 + Celery 任务触发
+  - 新增 [app/api/v1/endpoints/kb_files.py](../app/api/v1/endpoints/kb_files.py)：5 个 endpoint（POST 上传/GET 列表/GET 详情/DELETE/POST reindex），挂在 `/api/v1/knowledge-bases/{kb_id}/files`
+  - 新增 [app/tasks/ingest_task.py](../app/tasks/ingest_task.py)：S3.1 stub（仅记日志），S3.2 接入真实七步入库管道
+  - 挂载到 [app/api/v1/router.py](../app/api/v1/router.py)，`parse_and_ingest_task` 已注册到 Celery `_TASK_MODULES`
+  - 新增 [tests/test_kb_file_endpoints.py](../tests/test_kb_file_endpoints.py) **19 用例**（mock service，CI 友好）
+  - 新增 [tests/test_kb_file_service.py](../tests/test_kb_file_service.py) **20 用例**（mock DB + mock Celery + 临时磁盘文件，覆盖 upload/delete/reindex/磁盘工具的内部协调）
+  - mock 全量回归 336 passed，零回归（297 → 336，+39 新增 19+20）
+  - **设计决策**：允许同名文件（磁盘按 file_id 隔离）+ S3.7 扩展名为主 MIME 二次校验 + S3.5 Celery+async 约定（S3.2 实现时 follow）
+- **2026-06-11**：V1.5 S3.0 文档解析 + 切片模块完成
+  - 新增 [app/ingest/__init__.py](../app/ingest/__init__.py) 包入口
+  - 新增 [app/ingest/parser.py](../app/ingest/parser.py)：扩展名为主分发（PDF/docx/md/txt）+ MIME 二次校验 + `ParseError` 统一异常
+  - 新增 [app/ingest/splitter.py](../app/ingest/splitter.py)：`RecursiveCharacterTextSplitter` 包装 + tiktoken token 长度估算 + 中英文混合分隔符
+  - 新增 [tests/test_ingest_parser_and_splitter.py](../tests/test_ingest_parser_and_splitter.py) **28 用例**（fixture 现场生成 PDF/docx，不污染 repo）
+  - mock 全量回归 297 passed，零回归
 - **2026-06-11**：V1.5 S2 阶段集成测试验收通过 ✅
   - 本地 PG 实测 37/37 通过（test_sessions_api 3 + SES-01~06 15 + chat_service 5 + KB 14），1:34
   - 联调阶段定位并修复 3 个工程问题：

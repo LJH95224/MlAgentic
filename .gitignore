@@ -25,3 +25,5 @@ logs/
 *.log
 *.sqlite
 *.db
+uploads/*
+downloads/*

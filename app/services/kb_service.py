@@ -236,21 +236,21 @@ async def delete_kb(db: AsyncSession, kb_id: uuid.UUID) -> None:
     """完全清理知识库的所有资源（KB-05）。
 
     严格按 PRD §3.2 KB-05 顺序：
-    1. Milvus drop_collection（不可逆，最先做；失败 → 整体回滚返 500）
-    2. PG 删 knowledge_bases 记录（外键级联删 kb_files；失败 → Milvus 已丢，
+    1. **revoke 所有进行中的入库任务**（S3.2 追加）：防止 worker 在 KB 被删后
+       继续写已经不存在的 collection
+    2. Milvus drop_collection（不可逆，最先做；失败 → 整体回滚返 500）
+    3. Neo4j MATCH (n {kb_id}) DETACH DELETE n（删整个 kb 子图，包含 Document 和孤儿 Entity）
+    4. PG 删 knowledge_bases 记录（外键级联删 kb_files；失败 → Milvus 已丢，
        记日志告警，仍向上抛 500）
-    3. Neo4j MATCH (n {kb_id}) DETACH DELETE n（S5 阶段接通；S2 stub 仅记日志）
-
-    数据不一致风险：
-    - Milvus 成功 + PG 失败 → 用户 GET 仍能看到 KB（PG 在），但里头检索全空
-      → 重试 DELETE 会再次 Milvus drop（幂等返 False）+ 再次尝试 PG delete
-    - PG 成功 + Neo4j 失败 → Neo4j 残留 kb_id 节点，不影响业务，运维补刀
-
-    业务层做二次确认的责任在调用方（前端弹窗）。
+    5. **磁盘清理**（S3.2 追加）：清空 {UPLOAD_DIR}/{kb_id}/ 整个目录树
     """
     kb = await get_kb_or_raise(db, kb_id)
 
-    # ---- 1) Milvus drop（PRD 要求最先，不可逆）----
+    # ---- 1) revoke 所有进行中的 Celery 任务 ----
+    # 提前查 processing 状态的 file 行，避免外键级联删后查不到 celery_task_id
+    await _revoke_kb_processing_tasks(db, kb_id)
+
+    # ---- 2) Milvus drop（PRD 要求最先的实际数据操作，不可逆）----
     try:
         drop_kb_collection(kb_id)
     except RuntimeError as e:
@@ -260,7 +260,12 @@ async def delete_kb(db: AsyncSession, kb_id: uuid.UUID) -> None:
             f"删除知识库底层向量资源失败：{e}",
         ) from e
 
-    # ---- 2) PG delete（外键 ondelete=CASCADE 自动级联删 kb_files）----
+    # ---- 3) Neo4j 清理 ----
+    # 注意：这里删的是"该 KB 的整个子图"，比 FILE-04 的"单文件清理"粒度更粗
+    # 已经把 KB 当作整体抛弃，可以放心 DETACH DELETE 所有带 kb_id 标签的节点
+    await _cleanup_kb_neo4j(kb_id)
+
+    # ---- 4) PG delete（外键 ondelete=CASCADE 自动级联删 kb_files）----
     try:
         await db.delete(kb)
         await db.commit()
@@ -277,13 +282,98 @@ async def delete_kb(db: AsyncSession, kb_id: uuid.UUID) -> None:
             f"知识库元数据删除失败（向量库已清理，请人工介入）：{e}",
         ) from e
 
-    # ---- 3) Neo4j 清理（S5 阶段接通；当前 stub 仅记日志）----
-    # 留 TODO 标记：S5 实现时取消注释下两行 + 引入 app.kg.writer 的 delete_kb_subgraph
-    # try:
-    #     await delete_kb_subgraph(kb_id)
-    # except Exception as e:
-    #     logger.error("KB-05 Neo4j 子图删除失败 kb_id=%s（Milvus+PG 已删，仅图谱残留）: %s", kb_id, e)
-    logger.info("KB-05 知识库删除完成 kb_id=%s（Neo4j 清理待 S5 接通）", kb_id)
+    # ---- 5) 磁盘清理（S3.2 追加）----
+    # 即使前面步骤都成功，磁盘清理失败也只 warning，不影响业务（孤儿文件可由运维定期清）
+    _cleanup_kb_upload_dir(kb_id)
+
+    logger.info("KB-05 知识库删除完成 kb_id=%s", kb_id)
+
+
+async def _revoke_kb_processing_tasks(
+    db: AsyncSession, kb_id: uuid.UUID
+) -> None:
+    """KB-05 第 1 步：revoke 该 KB 下所有 processing 状态文件的 Celery 任务。
+
+    幂等：任务已结束 / 已 revoke / task_id 为空都不报错。
+    """
+    from app.models.kb_file import FILE_STATUS_PROCESSING, KbFile
+
+    stmt = select(KbFile.id, KbFile.celery_task_id).where(
+        KbFile.kb_id == kb_id,
+        KbFile.status == FILE_STATUS_PROCESSING,
+    )
+    rows = list((await db.execute(stmt)).all())
+
+    if not rows:
+        logger.info("KB-05 无 processing 任务需 revoke kb_id=%s", kb_id)
+        return
+
+    try:
+        from app.tasks.celery_app import celery_app
+
+        for file_id, task_id in rows:
+            if not task_id:
+                continue
+            try:
+                celery_app.control.revoke(task_id, terminate=True)
+                logger.info(
+                    "KB-05 已 revoke 任务 kb_id=%s file_id=%s task_id=%s",
+                    kb_id,
+                    file_id,
+                    task_id,
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.warning(
+                    "KB-05 revoke 失败 file_id=%s task_id=%s err=%s",
+                    file_id,
+                    task_id,
+                    e,
+                )
+    except ImportError:
+        logger.warning("KB-05 Celery 不可用，跳过任务 revoke kb_id=%s", kb_id)
+
+
+async def _cleanup_kb_neo4j(kb_id: uuid.UUID) -> None:
+    """KB-05 第 3 步：删除该 KB 在 Neo4j 中的所有节点和关系。
+
+    粒度：DETACH DELETE 所有 (n {kb_id: $kb_id})；
+    一并删 Document 和所有"只属于这个 KB"的 Entity。
+    失败仅记 warning，不阻断业务（孤儿节点不影响其它 KB 检索）。
+    """
+    try:
+        from app.core.config import get_settings
+        from app.kg.neo4j_client import get_neo4j_driver
+    except ImportError as e:
+        logger.warning("KB-05 Neo4j 驱动不可用，跳过图谱清理: %s", e)
+        return
+
+    try:
+        driver = get_neo4j_driver()
+    except RuntimeError as e:
+        logger.warning("KB-05 Neo4j 未初始化，跳过图谱清理 kb_id=%s: %s", kb_id, e)
+        return
+
+    settings = get_settings()
+    cypher = "MATCH (n {kb_id: $kb_id}) DETACH DELETE n"
+    try:
+        async with driver.session(database=settings.neo4j_database) as sess:
+            await sess.run(cypher, kb_id=str(kb_id))
+        logger.info("KB-05 Neo4j 子图已清理 kb_id=%s", kb_id)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("KB-05 Neo4j 子图清理失败 kb_id=%s err=%s", kb_id, e)
+
+
+def _cleanup_kb_upload_dir(kb_id: uuid.UUID) -> None:
+    """KB-05 第 5 步：清空 {UPLOAD_DIR}/{kb_id}/ 目录树。
+
+    复用 kb_file_service.remove_kb_upload_root；失败 warning 不抛。
+    """
+    try:
+        from app.services.kb_file_service import remove_kb_upload_root
+
+        remove_kb_upload_root(kb_id)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("KB-05 磁盘清理失败 kb_id=%s err=%s", kb_id, e)
 
 
 # ──────────────── KB-03 entity_count 懒计算（S5 接通） ────────────────
