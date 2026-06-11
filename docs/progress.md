@@ -32,7 +32,7 @@
 | 阶段 | 模块 | PRD 子需求 | 状态 | 完成日期 |
 |---|---|---|---|---|
 | S0 | 基础设施（Celery + Redis + DB 迁移） | TASK-01 / 数据模型 | ✅ 完成 + 联调验收 | 2026-06-11 |
-| S1 | 会话管理 CRUD（不含异步任务） | SES-01 ~ SES-06 / SES-09 | ⏳ 待开始 | — |
+| S1 | 会话管理 CRUD（不含异步任务） | SES-01 ~ SES-06 / SES-09 | ✅ 完成 + 集成测试验收 | 2026-06-11 |
 | S2 | 知识库 CRUD + Milvus 多 Collection | KB-01 ~ KB-05 | ⏳ 待开始 | — |
 | S3 | 文件上传 + 异步入库（核心） | FILE-01 ~ FILE-05 / TASK-02 / TASK-03 | ⏳ 待开始 | — |
 | S4 | 会话标题/摘要异步生成 | SES-07 / SES-08 / TASK-04 / TASK-05 | ⏳ 待开始 | — |
@@ -442,6 +442,36 @@ python scripts/kg_smoke.py
 
 ## 历史变更
 
+- **2026-06-11**：V1.5 S1 阶段集成测试验收通过 ✅
+  - 远程 PG（tyagent_test，AsyncPG 驱动）实测：23/23 集成测试通过（5:13）
+  - 联调阶段定位并修复 4 个工程问题：
+    1. **Windows + asyncpg + ProactorEventLoop 反复启停的连接池跨 loop 问题**：每个集成 fixture 末尾 `await engine.dispose()` 强制释放连接池
+    2. **集成测试反复跑 lifespan 太慢**：新增 `pg_client` fixture（monkeypatch 掉 init_milvus / init_neo4j），速度降到 ~7s/case
+    3. **`ORDER BY created_at` 的 PG tie 问题**：批量 insert `server_default=func.now()` 时间戳完全相同，PG 在 tie 下不保证插入顺序 → 给 service 排序加 `id` 做 tie-breaker（[chat_service.py](../app/services/chat_service.py) / [session_service.py](../app/services/session_service.py)）；测试 fixture 给每条消息显式递增 created_at
+    4. **测试期望写错**：cursor pagination 测试把"取最近 N 条"误写成"取最早 N 条"，已对齐 PRD SES-06 真实语义
+  - 沉淀写入 [docs/architecture.md](architecture.md) S1 段落 + 项目记忆 [[windows-asyncpg-dispose-per-test]]
+- **2026-06-11**：V1.5 S1.2/S1.3 SES-09 上下文窗口 + 消息计数维护
+  - 改造 [app/services/chat_service.py](../app/services/chat_service.py)：
+    - `_load_history` 按 `settings.context_window_messages` 截断（system 必含、不计数）
+    - 新增 `_append_message` 封装：写消息 + 一条 UPDATE 同步维护 `message_count` 与 `updated_at`
+    - `stream_chat` 改走 `_append_message`，user / assistant 消息都自动维护计数
+  - 新增 [tests/test_chat_service_v1_5.py](../tests/test_chat_service_v1_5.py)（**7 用例**，mock db，CI 友好）
+  - 新增 [tests/test_chat_service_v1_5_integration.py](../tests/test_chat_service_v1_5_integration.py)（5 用例，真 PG 集成，待用户启 PG 跑）
+  - 全量回归 199 passed + 26 skipped，零回归
+- **2026-06-11**：V1.5 S1.1 会话 CRUD（SES-01~06）完成（不含 SES-09 上下文窗口）
+  - 新增 [app/schemas/session.py](../app/schemas/session.py) 扩展（SessionCreateRequest / SessionUpdateRequest / SessionDetail / SessionListItem / SessionListResponse）
+  - 新增 [app/schemas/message.py](../app/schemas/message.py)（MessageItem / MessageListResponse）
+  - 扩展 [app/services/session_service.py](../app/services/session_service.py) 加 5 个业务方法（list / detail / update_title / delete / list_messages + get_or_raise）
+  - 扩展 [app/api/v1/endpoints/sessions.py](../app/api/v1/endpoints/sessions.py)：5 个新 endpoint（GET 列表 / GET 详情 / PATCH 标题 / DELETE / GET 消息历史）
+  - 新增 [tests/test_sessions_v1_5_endpoints.py](../tests/test_sessions_v1_5_endpoints.py)（**25 用例**，mock service 层，不依赖真 DB）
+  - 新增 [tests/test_sessions_v1_5_integration.py](../tests/test_sessions_v1_5_integration.py)（15 用例，真 PG 集成测试，待用户启 PG 跑）
+  - 全量回归 192 passed + 21 skipped，零失败
+- **2026-06-11**：V1.5 S1.0b 统一响应格式 V1.0+V1.5 全覆盖
+  - 主 app 挂 register_exception_handlers；老 endpoint 改包 ApiResponse；V1.0 测试同步改 + 新增 5 个 E2E（不依赖 DB）
+  - 全量回归 167 passed + 6 skipped，零回归
+- **2026-06-11**：V1.5 S1.0 统一响应基础设施
+  - 新增 ApiResponse 容器、9 条业务错误码、BusinessError + 4 个 handler，未挂主 app（24 个单测覆盖）
+  - 全量回归 162 passed + 6 skipped
 - **2026-06-11**：V1.5 S0 基础设施联调验收通过 ✅
   - ping_task smoke 全链路跑通：`pong: hello-S0 @ lvjinhu`
   - 联调阶段定位并修复 Windows + Docker Desktop 上 `localhost`→IPv6 vpnkit 丢包坑（默认值锁 127.0.0.1）

@@ -16,6 +16,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from app.api.exceptions import register_exception_handlers
 from app.api.v1.router import router as v1_router
 from app.core.config import get_settings
 from app.core.logging import setup_logging
@@ -70,6 +71,10 @@ def create_app() -> FastAPI:
         version="0.1.0",
         lifespan=lifespan,
     )
+
+    # V1.5 PRD §7.1：统一响应格式（BusinessError / HTTPException / 校验失败 / 未捕获异常
+    # 全部翻译成 {code, message, data}），SSE 流式响应不二次包装
+    register_exception_handlers(app)
 
     # 路由挂载
     app.include_router(v1_router)

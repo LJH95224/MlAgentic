@@ -25,10 +25,12 @@ SSE 协议格式（两行式，field:value）：
 
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 from sse_starlette.sse import EventSourceResponse
 
+from app.api import error_codes
 from app.api.deps import DBSessionDep
+from app.api.exceptions import BusinessError
 from app.schemas.chat import ChatRequest
 from app.services import chat_service, session_service
 
@@ -50,14 +52,13 @@ async def chat_stream(
 
     返回：
         - 200: SSE 事件流（media-type: text/event-stream）
-        - 404: session_id 不存在
+        - 404: session_id 不存在，body = {"code": 40400, "message": "...", "data": null}
     """
-    # 确认会话存在
+    # 确认会话存在；不存在走 BusinessError → 统一 404 响应（PRD §7.1 / §7.2）
     session = await session_service.get_session(db, body.session_id)
     if session is None:
-        raise HTTPException(
-            status_code=404,
-            detail=f"会话 {body.session_id} 不存在",
+        raise BusinessError(
+            error_codes.NOT_FOUND, f"会话 {body.session_id} 不存在"
         )
 
     logger.info(

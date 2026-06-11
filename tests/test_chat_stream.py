@@ -1,8 +1,9 @@
-"""流式对话接口测试（API-02 / API-03）。"""
+"""流式对话接口测试（API-02 / API-03；V1.5 起 4xx 响应包统一格式）。"""
 
 import json
 import uuid
 
+from app.api import error_codes
 from tests.conftest import skip_without_db
 
 
@@ -33,13 +34,11 @@ def _parse_sse_lines(text: str) -> list[dict]:
 async def test_chat_stream_full_flow(client):
     """完整链路：创建会话 → 发起流式对话 → 验证文本流 + done 事件。
 
-    注意：3.3 之后 agent 走真实 LangGraph + LLM 推理，是否触发 tool_call
-    取决于模型对提示词的判断，因此本测试只对"文本流必须存在"和"以 done 结尾"
-    做硬断言；tool_start 事件作为软断言（如果出现则校验结构）。
+    SSE 报文（成功路径）保持 V1.0 原协议不包装，前端逻辑零改动。
     """
-    # 1) 先建会话
+    # 1) 先建会话（V1.5 起响应包 data）
     sess_resp = await client.post("/api/v1/sessions")
-    session_id = sess_resp.json()["id"]
+    session_id = sess_resp.json()["data"]["id"]
 
     # 2) 发起流式对话
     resp = await client.post(
@@ -68,23 +67,36 @@ async def test_chat_stream_full_flow(client):
 
 @skip_without_db
 async def test_chat_stream_invalid_session_returns_404(client):
-    """对不存在的 session 发起对话应 404。"""
+    """对不存在的 session 发起对话应 404 + ApiResponse{code:40400, data:null}。
+
+    V1.5 改造：BusinessError(NOT_FOUND) → 统一 JSON 响应（PRD §7.1 / §7.2）。
+    """
     bogus_id = str(uuid.uuid4())
     resp = await client.post(
         "/api/v1/chat/stream",
         json={"session_id": bogus_id, "content": "hi"},
     )
     assert resp.status_code == 404
+    body = resp.json()
+    assert body["code"] == error_codes.NOT_FOUND
+    assert body["data"] is None
+    assert bogus_id in body["message"]
 
 
 @skip_without_db
 async def test_chat_stream_rejects_empty_content(client):
-    """content 为空应被 pydantic 拦截，返回 422。"""
+    """content 为空应被 pydantic 拦截，返回 422 + ApiResponse{code:40001, data:null}。"""
     sess_resp = await client.post("/api/v1/sessions")
-    session_id = sess_resp.json()["id"]
+    session_id = sess_resp.json()["data"]["id"]
 
     resp = await client.post(
         "/api/v1/chat/stream",
         json={"session_id": session_id, "content": ""},
     )
     assert resp.status_code == 422
+    body = resp.json()
+    # V1.5 起 Pydantic 校验失败统一翻译为 PARAM_INVALID
+    assert body["code"] == error_codes.PARAM_INVALID
+    assert body["data"] is None
+    # message 应该包含字段名以便前端定位
+    assert "content" in body["message"].lower()
