@@ -14,10 +14,16 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from typing import TYPE_CHECKING
 
 from app.core.config import get_settings
-from app.rag.schema import build_index_params, build_knowledge_chunks_schema
+from app.rag.naming import build_kb_collection_name
+from app.rag.schema import (
+    build_index_params,
+    build_kb_collection_schema,
+    build_knowledge_chunks_schema,
+)
 
 if TYPE_CHECKING:
     from pymilvus import MilvusClient
@@ -119,4 +125,125 @@ def close_milvus() -> None:
         logger.info("Milvus 连接已释放")
 
 
-__all__ = ["init_milvus", "get_milvus_client", "close_milvus"]
+# ──────────────── V1.5 多 KB Collection 生命周期 ────────────────
+
+
+def create_kb_collection(
+    kb_id: uuid.UUID | str,
+    dim: int | None = None,
+) -> str:
+    """为指定知识库创建独立 Milvus Collection（V1.5 KB-01）。
+
+    同步完成：
+      1. 创建 Collection（schema 见 build_kb_collection_schema）
+      2. 建 HNSW 向量索引 + INVERTED document_id 索引
+      3. load_collection 加载到内存
+
+    幂等：Collection 已存在 → 直接 load 并返回 collection name；不报错。
+
+    Args:
+        kb_id: 知识库 UUID
+        dim: 向量维度；缺省使用 settings.embedding_dimension
+
+    Returns:
+        Collection 名（形如 "kb_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"）
+
+    Raises:
+        RuntimeError: Milvus 未初始化 / 建 Collection 失败
+    """
+    client = get_milvus_client()
+    settings = get_settings()
+    effective_dim = dim if dim is not None else settings.embedding_dimension
+
+    collection_name = build_kb_collection_name(kb_id)
+
+    if client.has_collection(collection_name):
+        logger.info("KB Collection '%s' 已存在，直接 load", collection_name)
+    else:
+        logger.info(
+            "KB Collection '%s' 不存在，创建 Schema(dim=%d) + HNSW 索引",
+            collection_name,
+            effective_dim,
+        )
+        schema = build_kb_collection_schema(dim=effective_dim)
+        index_params = build_index_params(client)
+
+        try:
+            client.create_collection(
+                collection_name=collection_name,
+                schema=schema,
+                index_params=index_params,
+            )
+        except Exception as e:
+            # 创建失败要让上层回滚 PG（kb_service 里 try/except 捕捉）
+            raise RuntimeError(
+                f"创建 KB Collection 失败 name={collection_name}: {e}"
+            ) from e
+
+        logger.info("KB Collection '%s' 创建完成", collection_name)
+
+    # load_collection 幂等
+    client.load_collection(collection_name)
+    logger.info("KB Collection '%s' 已加载到内存", collection_name)
+
+    return collection_name
+
+
+def drop_kb_collection(kb_id: uuid.UUID | str) -> bool:
+    """删除指定知识库的 Milvus Collection（V1.5 KB-05）。
+
+    不可逆操作。建议调用方先在业务层做二次确认。
+    幂等：Collection 不存在 → 直接返回 False；存在 → drop 后返回 True。
+
+    Args:
+        kb_id: 知识库 UUID
+
+    Returns:
+        True 表示真删了 / False 表示本来就不存在
+
+    Raises:
+        RuntimeError: Milvus 未初始化 / drop 失败
+    """
+    client = get_milvus_client()
+    collection_name = build_kb_collection_name(kb_id)
+
+    if not client.has_collection(collection_name):
+        logger.warning("KB Collection '%s' 不存在，drop 跳过", collection_name)
+        return False
+
+    try:
+        # release 是 drop 的前置（PyMilvus 2.6+ drop 内部会自动 release，
+        # 这里显式 release 一遍更直观、出错时定位更容易）
+        try:
+            client.release_collection(collection_name)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(
+                "KB Collection '%s' release 失败（继续 drop）: %s",
+                collection_name,
+                e,
+            )
+        client.drop_collection(collection_name)
+    except Exception as e:
+        raise RuntimeError(
+            f"删除 KB Collection 失败 name={collection_name}: {e}"
+        ) from e
+
+    logger.info("KB Collection '%s' 已删除", collection_name)
+    return True
+
+
+def kb_collection_exists(kb_id: uuid.UUID | str) -> bool:
+    """检查指定 KB 的 Collection 是否存在（调试 / 健康检查用）。"""
+    client = get_milvus_client()
+    return client.has_collection(build_kb_collection_name(kb_id))
+
+
+__all__ = [
+    "init_milvus",
+    "get_milvus_client",
+    "close_milvus",
+    # V1.5 KB Collection 生命周期
+    "create_kb_collection",
+    "drop_kb_collection",
+    "kb_collection_exists",
+]

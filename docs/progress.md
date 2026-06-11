@@ -33,7 +33,7 @@
 |---|---|---|---|---|
 | S0 | 基础设施（Celery + Redis + DB 迁移） | TASK-01 / 数据模型 | ✅ 完成 + 联调验收 | 2026-06-11 |
 | S1 | 会话管理 CRUD（不含异步任务） | SES-01 ~ SES-06 / SES-09 | ✅ 完成 + 集成测试验收 | 2026-06-11 |
-| S2 | 知识库 CRUD + Milvus 多 Collection | KB-01 ~ KB-05 | ⏳ 待开始 | — |
+| S2 | 知识库 CRUD + Milvus 多 Collection | KB-01 ~ KB-05 | ✅ 完成 + 集成测试验收 | 2026-06-11 |
 | S3 | 文件上传 + 异步入库（核心） | FILE-01 ~ FILE-05 / TASK-02 / TASK-03 | ⏳ 待开始 | — |
 | S4 | 会话标题/摘要异步生成 | SES-07 / SES-08 / TASK-04 / TASK-05 | ⏳ 待开始 | — |
 | S5 | KB 关联对话 + 端到端联调 | KB-06 | ⏳ 待开始 | — |
@@ -442,6 +442,31 @@ python scripts/kg_smoke.py
 
 ## 历史变更
 
+- **2026-06-11**：V1.5 S2 阶段集成测试验收通过 ✅
+  - 本地 PG 实测 37/37 通过（test_sessions_api 3 + SES-01~06 15 + chat_service 5 + KB 14），1:34
+  - 联调阶段定位并修复 3 个工程问题：
+    1. **远程 PG 不稳 → 搬到本地 docker-compose**：新增 `postgres:17-alpine` 服务（含 init 脚本自动建 `tyagent_test`），从远程 117.72.214.41 切到 127.0.0.1。测试速度 3-5x 提升，WinError 121 信号灯超时彻底消失
+    2. **Windows asyncpg 连接池跨 event loop bug → engine 在测试模式用 NullPool**：[app/db/session.py](../app/db/session.py) 检测 `TEST_DATABASE_URL` 存在时自动切 NullPool，每次新建/即断不复用，避免 pytest-asyncio 用例间连接池跨 loop 复用导致的 "Event loop is closed" 等问题；生产路径完全不受影响
+    3. **PG `ORDER BY created_at` tie 问题已在 S1 修过**（[chat_service.py](../app/services/chat_service.py) / [session_service.py](../app/services/session_service.py) 加 `id` tie-breaker），S2 阶段沿用，KB 列表 `ORDER BY created_at + id` 也已加 tie-breaker
+  - 同步修 `test_sessions_api.py` 从重型 `client` fixture 切到轻量 `pg_client`（V1.0 老测试本就不需要 Milvus/Neo4j），CI 不必起 Neo4j 也能跑全量集成
+  - 沉淀写入项目记忆 [[postgres-local-docker-compose-for-tests]]
+- **2026-06-11**：V1.5 S2.1 KB CRUD endpoint 完成（mock 全过，集成测试待用户跑）
+  - 新增 [app/schemas/knowledge_base.py](../app/schemas/knowledge_base.py)（CreateRequest / UpdateRequest / Detail / ListItem / ListResponse）
+  - 新增 [app/services/kb_service.py](../app/services/kb_service.py)（KB-01~05 业务逻辑，含失败回滚 + KB-05 严格清理顺序）
+  - 新增 [app/api/v1/endpoints/knowledge_bases.py](../app/api/v1/endpoints/knowledge_bases.py)（5 个 endpoint）
+  - 挂载到 [app/api/v1/router.py](../app/api/v1/router.py)
+  - 新增 [tests/test_kb_endpoints.py](../tests/test_kb_endpoints.py) **29 用例**（mock service，CI 友好）
+  - 新增 [tests/test_kb_service.py](../tests/test_kb_service.py) **16 用例**（mock DB + mock Milvus，service 内部协调逻辑）
+  - 新增 [tests/test_kb_v1_5_integration.py](../tests/test_kb_v1_5_integration.py) 13 用例（真 PG + 真 Milvus，待用户跑）
+  - 扩展 [tests/conftest.py](../tests/conftest.py) 加 `kb_client` fixture（真 PG + 真 Milvus + 跳 Neo4j，含本测 Collection 清理）
+  - mock 全量回归 269 passed，零回归（224 + 29 + 16 = 269）
+- **2026-06-11**：V1.5 S2.0 RAG 基础设施完成（多 KB Collection 命名 + Schema 扩展 + 生命周期）
+  - 新增 [app/rag/naming.py](../app/rag/naming.py)（KB Collection 命名规则：`kb_{uuid.hex}`，唯一真相源）
+  - 扩展 [app/rag/schema.py](../app/rag/schema.py) 增 `build_kb_collection_schema`（V1.0 7 字段 + kb_id 共 8 字段）
+  - 扩展 [app/rag/milvus_client.py](../app/rag/milvus_client.py) 增 `create_kb_collection` / `drop_kb_collection` / `kb_collection_exists`
+  - 新增 [tests/test_rag_naming_and_kb_collection.py](../tests/test_rag_naming_and_kb_collection.py) 25 用例（mock pymilvus）
+  - 全量回归 224 passed，零回归
+  - S2.1 决策：KB-03 entity_count 走懒计算（S2 stub 0 / S5 接通 Neo4j）；KB-05 严格按 Milvus → PG → Neo4j 顺序清理
 - **2026-06-11**：V1.5 S1 阶段集成测试验收通过 ✅
   - 远程 PG（tyagent_test，AsyncPG 驱动）实测：23/23 集成测试通过（5:13）
   - 联调阶段定位并修复 4 个工程问题：

@@ -1,9 +1,24 @@
-"""会话接口测试（API-01；V1.5 已包统一响应格式）。"""
+"""会话接口测试（V1.0 API-01；V1.5 已包统一响应格式）。
+
+V1.5 改造（2026-06-11）：fixture 从重型 `client`（依赖 Milvus + Neo4j + LLM）
+改为轻量 `pg_client`（仅 PG），因为这些用例本就只测 POST /sessions 和 /health，
+跟 Milvus / Neo4j 无关。改完后 CI 不需要起 Neo4j 也能跑全量集成测试。
+
+真正需要走 RAG + KG + LLM 的端到端测试（test_chat_stream）仍用 `client` fixture。
+"""
 
 import uuid
 
+import pytest
+
 from app.api import error_codes
 from tests.conftest import skip_without_db
+
+
+# 用别名 fixture 把本文件里 `client` 参数自动注入 pg_client（不连 Milvus/Neo4j）
+@pytest.fixture
+def client(pg_client):
+    return pg_client
 
 
 @skip_without_db
@@ -38,8 +53,6 @@ async def test_create_session_returns_unique_ids(client):
 
 async def test_health(client):
     """健康检查不依赖 DB，应始终通过；V1.5 仍按原裸 JSON 返回（不属于 v1 业务接口）。"""
-    # 这里用了 client 夹具但接口本身不读 DB；如果没 DB 仍会被 skip，
-    # 是因为 client 夹具本身依赖 DB。在 V1.0 阶段这是可接受的开销。
     resp = await client.get("/health")
     assert resp.status_code == 200
     assert resp.json() == {"status": "ok"}

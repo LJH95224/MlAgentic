@@ -5,9 +5,10 @@
 
 from fastapi import APIRouter
 
-from app.api.v1.endpoints import chat, sessions
+from app.api.v1.endpoints import chat, knowledge_bases, sessions
 
 router = APIRouter(prefix="/api/v1")
 
 router.include_router(sessions.router)
 router.include_router(chat.router)
+router.include_router(knowledge_bases.router)

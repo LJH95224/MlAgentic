@@ -36,6 +36,45 @@ skip_without_db = pytest.mark.skipif(
 )
 
 
+# ────────────── 集成测试连接重试 ──────────────
+
+
+async def _create_all_with_retry(engine, max_attempts: int = 2) -> None:
+    """fixture setup 时 drop_all + create_all，带轻量重试。
+
+    2026-06-11 起 PG 已搬到本地 docker-compose（127.0.0.1:5432），网络稳定。
+    仍保留 2 次重试作为容器刚启动 / 偶发抖动的兜底，开发体验更顺。
+    """
+    import asyncio
+
+    from app.models.base import Base
+
+    last_err: Exception | None = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            async with engine.begin() as conn:
+                await conn.run_sync(Base.metadata.drop_all)
+                await conn.run_sync(Base.metadata.create_all)
+            return
+        except (OSError, asyncio.TimeoutError) as e:
+            last_err = e
+            if attempt < max_attempts:
+                import logging
+
+                logging.getLogger(__name__).warning(
+                    "PG 连接失败（第 %d/%d 次，等 1s 重试）: %r",
+                    attempt,
+                    max_attempts,
+                    e,
+                )
+                await asyncio.sleep(1)
+            try:
+                await engine.dispose()
+            except Exception:  # noqa: BLE001
+                pass
+    raise last_err  # type: ignore[misc]
+
+
 # ────────────── client fixtures ──────────────
 
 
@@ -51,11 +90,8 @@ async def client() -> AsyncIterator[AsyncClient]:
 
     from app.db.session import engine
     from app.main import app
-    from app.models.base import Base
 
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
-        await conn.run_sync(Base.metadata.create_all)
+    await _create_all_with_retry(engine)
 
     try:
         transport = ASGITransport(app=app)
@@ -86,11 +122,8 @@ async def pg_client() -> AsyncIterator[AsyncClient]:
 
     from app.db.session import engine
     from app.main import app
-    from app.models.base import Base
 
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
-        await conn.run_sync(Base.metadata.create_all)
+    await _create_all_with_retry(engine)
 
     # monkeypatch 掉 Milvus / Neo4j 的 init / close（lifespan 里调它们）
     import app.main as main_mod
@@ -124,6 +157,79 @@ async def pg_client() -> AsyncIterator[AsyncClient]:
         main_mod.close_neo4j = original_close_neo4j
         # 强制释放 asyncpg 连接池：pytest-asyncio 每个用例独立 event loop，
         # 不 dispose 的话下次用例会复用绑在旧 loop 上的连接 → 信号灯超时
+        await engine.dispose()
+
+
+@pytest_asyncio.fixture
+async def kb_client() -> AsyncIterator[AsyncClient]:
+    """KB 集成 client：真 PG + 真 Milvus，跳过 Neo4j。
+
+    适用：S2 KB CRUD 集成测试（KB-01 真建 Collection、KB-05 真 drop Collection）。
+    与 pg_client 的差异：保留 Milvus init/close，只 monkeypatch 掉 Neo4j。
+
+    用例结束时除 engine.dispose() 外，还会清理本测产生的 KB Collection
+    （以 `kb_` 开头的临时 Collection）—— 避免污染 Milvus 实例。
+    """
+    if not HAS_DB:
+        pytest.skip("需要 TEST_DATABASE_URL")
+
+    from app.db.session import engine
+    from app.main import app
+
+    await _create_all_with_retry(engine)
+
+    # 只 monkeypatch Neo4j（S5 才接通），保留 Milvus
+    import app.main as main_mod
+
+    async def _noop_async():
+        return None
+
+    original_init_neo4j = main_mod.init_neo4j
+    original_close_neo4j = main_mod.close_neo4j
+    main_mod.init_neo4j = _noop_async
+    main_mod.close_neo4j = _noop_async
+
+    # 记录测试开始前已存在的 KB Collection（避免误删用户数据）
+    pre_existing_kb_collections: set[str] = set()
+    try:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            async with app.router.lifespan_context(app):
+                # lifespan 已经 init_milvus，可拿 client 记录初始状态
+                try:
+                    from app.rag.milvus_client import get_milvus_client
+                    from app.rag.naming import is_kb_collection_name
+
+                    milvus_client = get_milvus_client()
+                    for name in milvus_client.list_collections():
+                        if is_kb_collection_name(name):
+                            pre_existing_kb_collections.add(name)
+                except Exception:  # noqa: BLE001
+                    # Milvus 不可达时让 lifespan 抛错，不要在 fixture 里掩盖
+                    pass
+
+                yield ac
+
+                # 用例结束后清理本测期间新增的 KB Collection
+                try:
+                    from app.rag.milvus_client import get_milvus_client
+                    from app.rag.naming import is_kb_collection_name
+
+                    milvus_client = get_milvus_client()
+                    for name in milvus_client.list_collections():
+                        if (
+                            is_kb_collection_name(name)
+                            and name not in pre_existing_kb_collections
+                        ):
+                            try:
+                                milvus_client.drop_collection(name)
+                            except Exception:  # noqa: BLE001
+                                pass
+                except Exception:  # noqa: BLE001
+                    pass
+    finally:
+        main_mod.init_neo4j = original_init_neo4j
+        main_mod.close_neo4j = original_close_neo4j
         await engine.dispose()
 
 

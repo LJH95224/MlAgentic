@@ -24,10 +24,12 @@ class Settings(BaseSettings):
     # --- 数据库（PostgreSQL，会话与消息存储；必须使用 asyncpg 驱动） ---
     # 注：知识切片库由 Milvus 管理（3.5 阶段引入），知识图谱由 Neo4j 管理（3.6 阶段引入），
     #     PostgreSQL 不再承担向量存储职责。
+    # 默认指向 docker-compose 起的本地 postgres:17-alpine（用户/密码/库：postgres/postgres/tyagent）。
+    # ⚠️ Windows 必须用 127.0.0.1（IPv6 vpnkit 转发坑详见 docs/celery_dev_guide.md §5.1b）。
     # ⚠️ 密码若含 @ / # / ? 等特殊字符，必须在 .env 中预先 URL 编码
     # （例如 @ -> %40），否则 asyncpg 会把密码后半段当成主机名。
     database_url: str = Field(
-        default="postgresql+asyncpg://postgres:postgres@localhost:5432/tyagent",
+        default="postgresql+asyncpg://postgres:postgres@127.0.0.1:5432/tyagent",
         alias="DATABASE_URL",
     )
 

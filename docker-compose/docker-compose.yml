@@ -126,6 +126,41 @@ services:
       retries: 5
       start_period: 5s
 
+  # ============================================================
+  # PostgreSQL 服务（V1.5 集成测试本地化，2026-06-11）
+  # ------------------------------------------------------------
+  # 端口：5432
+  # 镜像：postgres:17-alpine（与 V1.0 联调通过的 PostgreSQL 17 对齐）
+  # 默认账号 / 库：postgres / postgres / tyagent
+  #   - 与 .env.example 中 DATABASE_URL 一致，开箱即用
+  #   - 集成测试用 tyagent_test（init 脚本会自动建）
+  # 持久化卷：d:/dockerVolumes/postgres/data
+  # 性能调优：默认参数即可（开发态），生产部署需做 shared_buffers / wal 调优
+  # ============================================================
+  postgres:
+    container_name: tyagent-postgres
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: tyagent
+      # UTF-8 编码 + 中文 collate；存储中文标题/摘要不踩坑
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --lc-collate=C --lc-ctype=C"
+      TZ: Asia/Shanghai
+    ports:
+      - "5432:5432"
+    volumes:
+      - d:/dockerVolumes/postgres/data:/var/lib/postgresql/data
+      # 容器首次启动时自动跑 /docker-entrypoint-initdb.d/*.sql；
+      # 这里挂载一段 SQL 建测试库 tyagent_test
+      - ./postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d tyagent"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
 networks:
   default:
     name: milvus

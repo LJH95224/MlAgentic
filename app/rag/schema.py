@@ -140,5 +140,43 @@ def build_index_params(client: MilvusClient) -> "object":
 
 __all__ = [
     "build_knowledge_chunks_schema",
+    "build_kb_collection_schema",
     "build_index_params",
 ]
+
+
+# ──────────────── V1.5 多 KB Collection ────────────────
+
+
+# KB Collection 比 V1.0 多一个 kb_id 冗余字段（PRD §5.4）
+_MAX_KB_ID_LEN = 64
+
+
+def build_kb_collection_schema(dim: int = _DEFAULT_DIM) -> CollectionSchema:
+    """构建 V1.5 KB Collection 的 Schema（在 V1.0 基础上加 kb_id 冗余字段）。
+
+    与 `build_knowledge_chunks_schema` 的差异：
+    - 新增 `kb_id` VARCHAR(64) 字段（PRD §5.4）
+      虽然每个 KB 一个独立 Collection 已天然隔离了数据，但 Schema 里冗余存一份
+      `kb_id` 便于跨 Collection 调试 / 运维查询时定位（比如导出某 KB 全部切片）
+
+    Args:
+        dim: 向量维度，必须与 KB 配置的 embedding_dim 严格一致。
+    """
+    # 复用 V1.0 的 7 个字段
+    base_schema = build_knowledge_chunks_schema(dim=dim)
+    base_fields = list(base_schema.fields)
+
+    # 追加 V1.5 的 kb_id 字段
+    kb_id_field = FieldSchema(
+        name="kb_id",
+        dtype=DataType.VARCHAR,
+        max_length=_MAX_KB_ID_LEN,
+        description="所属知识库 UUID（冗余字段，便于跨 Collection 运维查询；PRD §5.4）",
+    )
+
+    return CollectionSchema(
+        fields=base_fields + [kb_id_field],
+        description="V1.5 KB 切片库（PRD §5.4，按 kb_id 独立 Collection）",
+        enable_dynamic_field=False,
+    )
