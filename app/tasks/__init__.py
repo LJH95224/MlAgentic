@@ -6,12 +6,22 @@
     from app.tasks.ping import ping_task
 
 后续阶段会陆续注册：
-- S3：app.tasks.ingest_task.parse_and_ingest_task（文件解析入库）★ S3.1 已 stub，S3.2 完整实现
-- S4：app.tasks.session_task.generate_session_title_task / summary_task
+- S3：app.tasks.ingest_task.parse_and_ingest_task（文件解析入库）★ 2026-06-11 完整实现
+- S4：app.tasks.session_task.generate_session_{title,summary}_task ★ 2026-06-11 已实现
 """
 
 from app.tasks.celery_app import celery_app
 from app.tasks.ingest_task import parse_and_ingest_task
 from app.tasks.ping import ping_task
+from app.tasks.session_task import (
+    generate_session_summary_task,
+    generate_session_title_task,
+)
 
-__all__ = ["celery_app", "ping_task", "parse_and_ingest_task"]
+__all__ = [
+    "celery_app",
+    "ping_task",
+    "parse_and_ingest_task",
+    "generate_session_title_task",
+    "generate_session_summary_task",
+]

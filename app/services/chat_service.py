@@ -19,6 +19,7 @@ from sqlalchemy import desc, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent import runner as agent_runner
+from app.agent.context import reset_current_kb_ids, set_current_kb_ids
 from app.agent.runner import (
     AgentDone,
     AgentTextChunk,
@@ -170,38 +171,107 @@ async def stream_chat(
     db: AsyncSession,
     session_id: uuid.UUID,
     user_input: str,
+    kb_ids: list[uuid.UUID] | None = None,
 ) -> AsyncIterator[SSEEvent]:
     """处理一次完整的对话请求并以 SSE 事件形式流式返回。
 
     步骤：
     1. 从 DB 加载历史消息（按 SES-09 上下文窗口截断；本轮 user_input 尚未落库）
     2. 持久化本轮用户消息 + 维护会话计数
-    3. 调用 agent runner，传入历史 + 当前输入
-    4. 把 Agent 内部事件翻译为对外 SSE 事件并 yield
-    5. 持久化 assistant 最终回复 + 维护会话计数
-    6. 最后发送 done 事件
+    3. 在 contextvar 中设置 kb_ids，让 retriever / KG 工具能读到
+       （V1.5 KB-06：LLM 不可见 kb_ids，只能通过 endpoint 传入）
+    4. 调用 agent runner，传入历史 + 当前输入
+    5. 把 Agent 内部事件翻译为对外 SSE 事件并 yield
+    6. 持久化 assistant 最终回复 + 维护会话计数
+    7. 最后发送 done 事件
     """
     # 1. 先取历史（在 user_input 落库之前），避免本轮 user 自己也被算进上下文
     history = await _load_history(db, session_id)
-    logger.info("加载历史消息: session=%s into_context=%d", session_id, len(history))
+    logger.info(
+        "加载历史消息: session=%s into_context=%d kb_ids=%s",
+        session_id,
+        len(history),
+        kb_ids,
+    )
 
     # 2. 用户消息落库 + 维护 message_count / updated_at
     await _append_message(db, session_id, role="user", content=user_input)
 
-    # 3. 调度 Agent，逐事件翻译为 SSE 事件
-    final_text_parts: list[str] = []
-    async for event in agent_runner.run_stream(session_id, user_input, history=history):
-        if isinstance(event, AgentTextChunk):
-            final_text_parts.append(event.content)
-            yield TextEvent(content=event.content)
-        elif isinstance(event, AgentToolStart):
-            yield ToolStartEvent(tool=event.tool, args=event.args)
-        elif isinstance(event, AgentToolEnd):
-            yield ToolEndEvent(tool=event.tool, output=event.output)
-        elif isinstance(event, AgentDone):
-            # 优先采用 runner 给出的 final_content，否则回退到累积的 text
-            final_text = event.final_content or "".join(final_text_parts)
-            await _append_message(
-                db, session_id, role="assistant", content=final_text
+    # 3. 注入 kb_ids 上下文（KB-06）
+    # 用 try/finally 保证即使 Agent 异常也 reset，避免污染下个请求
+    token = set_current_kb_ids(kb_ids)
+
+    try:
+        # 4. 调度 Agent，逐事件翻译为 SSE 事件
+        final_text_parts: list[str] = []
+        async for event in agent_runner.run_stream(
+            session_id, user_input, history=history
+        ):
+            if isinstance(event, AgentTextChunk):
+                final_text_parts.append(event.content)
+                yield TextEvent(content=event.content)
+            elif isinstance(event, AgentToolStart):
+                # KB-06 验收点：tool_start 事件携带本轮 kb_ids 信息，前端可见
+                args = dict(event.args) if event.args else {}
+                if kb_ids is not None:
+                    args["_kb_ids"] = [str(k) for k in kb_ids]
+                yield ToolStartEvent(tool=event.tool, args=args)
+            elif isinstance(event, AgentToolEnd):
+                yield ToolEndEvent(tool=event.tool, output=event.output)
+            elif isinstance(event, AgentDone):
+                # 优先采用 runner 给出的 final_content，否则回退到累积的 text
+                final_text = event.final_content or "".join(final_text_parts)
+                await _append_message(
+                    db, session_id, role="assistant", content=final_text
+                )
+                # SES-07：首轮 AI 回复完成后异步触发标题生成
+                await _maybe_trigger_title_task(db, session_id)
+                yield DoneEvent()
+    finally:
+        reset_current_kb_ids(token)
+
+
+# ──────────────── SES-07 标题异步触发 ────────────────
+
+
+async def _maybe_trigger_title_task(
+    db: AsyncSession, session_id: uuid.UUID
+) -> None:
+    """首轮 AI 回复完成后判断是否触发标题生成任务（SES-07 / TASK-04）。
+
+    触发条件（dev_plan S4 决策："首次 AI 回复后立即触发"）：
+    - session.title 当前为 NULL（未手动设置过）
+    - session.message_count == 2（首条 user + 首条 assistant 都已落库）
+
+    其它情况一律跳过。任务自身也会再判一次 title is None 防并发竞态。
+
+    Celery 不可达时只记 warning 不抛错（异步标题失败不应阻断对话主路径）。
+    """
+    try:
+        sess = (
+            await db.execute(
+                select(ChatSession).where(ChatSession.id == session_id)
             )
-            yield DoneEvent()
+        ).scalar_one_or_none()
+        if sess is None:
+            return
+        if sess.title is not None:
+            return
+        if sess.message_count != 2:
+            return
+
+        # 局部导入，避免 Celery 不可用时影响 chat_service 模块加载
+        from app.tasks.session_task import generate_session_title_task
+
+        async_result = generate_session_title_task.delay(str(session_id))
+        logger.info(
+            "SES-07 触发标题任务 session=%s task_id=%s",
+            session_id,
+            async_result.id,
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning(
+            "SES-07 触发标题任务失败（已忽略，title 保持 NULL）session=%s err=%s",
+            session_id,
+            e,
+        )

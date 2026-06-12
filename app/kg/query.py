@@ -40,16 +40,23 @@ def build_cypher(
     entity_type: str | None,
     relation_types: list[str] | None,
     max_hops: int,
+    kb_ids: list[str] | None = None,
 ) -> str:
     """根据可选过滤构造 Cypher 文本（max_hops 必须已 clamp）。
 
     单独成函数，让单测能直接断言 Cypher 文本而不必跑真 Neo4j。
+
+    V1.5 KB-06：传入 kb_ids 时追加 `start.kb_id IN $kb_ids` 过滤——只查这些
+    KB 的子图，不污染其它 KB 的实体。kb_ids=None 时不过滤（V1.0 行为）。
     """
     where_clauses: list[str] = []
     if entity_type:
         where_clauses.append("start.type = $entity_type")
     if relation_types:
         where_clauses.append("ALL(rel IN r WHERE type(rel) IN $rel_types)")
+    if kb_ids:
+        # V1.5 KB-06：起点实体必须属于指定的 KB
+        where_clauses.append("start.kb_id IN $kb_ids")
 
     where_block = ""
     if where_clauses:
@@ -75,14 +82,17 @@ async def _query_tx(
     name: str,
     entity_type: str | None,
     rel_types: list[str] | None,
+    kb_ids: list[str] | None = None,
 ) -> list[dict]:
     """事务函数：执行查询并把结果完全消费成 list[dict]。"""
-    result = await tx.run(
-        cypher,
-        name=name,
-        entity_type=entity_type,
-        rel_types=rel_types,
-    )
+    params: dict = {
+        "name": name,
+        "entity_type": entity_type,
+        "rel_types": rel_types,
+    }
+    if kb_ids is not None:
+        params["kb_ids"] = kb_ids
+    result = await tx.run(cypher, **params)
     records = []
     async for record in result:
         records.append(dict(record))
@@ -95,6 +105,7 @@ async def execute_graph_query(
     entity_type: str | None,
     relation_types: list[str] | None,
     max_hops: int,
+    kb_ids: list[str] | None = None,
 ) -> list[dict]:
     """执行多跳图谱查询，返回原始 records。
 
@@ -104,6 +115,7 @@ async def execute_graph_query(
         entity_type: 可选，限定起点实体类型
         relation_types: 可选，限定路径上的关系类型列表
         max_hops: 路径最大跳数（自动 clamp 到 1-5）
+        kb_ids: V1.5 KB-06，可选 list[str(UUID)]，限定起点实体属于这些 KB
 
     Returns:
         每条形如 {"start":..., "start_type":..., "nodes_in_path":[...],
@@ -111,19 +123,20 @@ async def execute_graph_query(
     """
     settings = get_settings()
     hops = _clamp_hops(max_hops)
-    cypher = build_cypher(entity_type, relation_types, hops)
+    cypher = build_cypher(entity_type, relation_types, hops, kb_ids=kb_ids)
 
     logger.info(
-        "graph_query: entity=%r type=%s rels=%s hops=%d",
+        "graph_query: entity=%r type=%s rels=%s hops=%d kb_ids=%s",
         entity_name,
         entity_type,
         relation_types,
         hops,
+        kb_ids,
     )
 
     async with driver.session(database=settings.neo4j_database) as sess:
         return await sess.execute_read(
-            _query_tx, cypher, entity_name, entity_type, relation_types
+            _query_tx, cypher, entity_name, entity_type, relation_types, kb_ids
         )
 
 

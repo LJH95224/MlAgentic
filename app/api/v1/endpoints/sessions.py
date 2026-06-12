@@ -1,4 +1,4 @@
-"""会话端点（V1.0 API-01 + V1.5 SES-01~06）。
+"""会话端点（V1.0 API-01 + V1.5 SES-01~08）。
 
 V1.5 起所有响应包成 `ApiResponse[T]`（PRD §7.1）；4xx 错误由 BusinessError 统一翻译。
 """
@@ -8,6 +8,7 @@ import uuid
 from http import HTTPStatus
 
 from fastapi import APIRouter, Query
+from pydantic import BaseModel, Field
 
 from app.api.deps import DBSessionDep
 from app.schemas.message import MessageItem, MessageListResponse
@@ -153,3 +154,63 @@ async def list_session_messages(
         next_before=next_before,
     )
     return ApiResponse[MessageListResponse].success(payload)
+
+
+# ──────────────── SES-08 摘要生成（主动触发） ────────────────
+
+
+class SummarizeResponse(BaseModel):
+    """摘要触发响应：返回 Celery task_id 供前端轮询（PRD §3.1 SES-08）。"""
+
+    task_id: str = Field(..., description="Celery 任务 ID")
+
+
+@router.post(
+    "/{session_id}/summarize",
+    response_model=ApiResponse[SummarizeResponse],
+    status_code=HTTPStatus.ACCEPTED,
+)
+async def trigger_session_summary(
+    session_id: uuid.UUID, db: DBSessionDep
+) -> ApiResponse[SummarizeResponse]:
+    """主动触发会话摘要生成（V1.5 SES-08 / TASK-05）。
+
+    立即返回 202 Accepted + task_id；后台异步把全量 messages 拼成 prompt 调
+    LLM 生成 200 字以内摘要，写到 ChatSession.summary + summarized_at。
+
+    幂等：多次调用覆盖更新；任务失败不写空值（任务内部保护）。
+    Celery 不可达 → 50300（PRD §7.2）。
+    """
+    # 校验会话存在；不存在 → 404
+    await session_service.get_session_or_raise(db, session_id)
+
+    # 局部导入：Celery 不可用时仅 endpoint 报错，其它 endpoint 不受影响
+    try:
+        from app.tasks.session_task import generate_session_summary_task
+    except Exception as e:  # noqa: BLE001
+        logger.error("SES-08 Celery 模块加载失败: %s", e)
+        from app.api import error_codes
+        from app.api.exceptions import BusinessError
+
+        raise BusinessError(
+            error_codes.CELERY_UNAVAILABLE, f"异步任务队列不可用: {e}"
+        ) from e
+
+    try:
+        async_result = generate_session_summary_task.delay(str(session_id))
+    except Exception as e:  # noqa: BLE001
+        logger.error("SES-08 触发摘要任务失败 session=%s: %s", session_id, e)
+        from app.api import error_codes
+        from app.api.exceptions import BusinessError
+
+        raise BusinessError(
+            error_codes.CELERY_UNAVAILABLE, f"触发摘要任务失败: {e}"
+        ) from e
+
+    logger.info(
+        "SES-08 摘要任务已提交 session=%s task_id=%s", session_id, async_result.id
+    )
+    return ApiResponse[SummarizeResponse].success(
+        SummarizeResponse(task_id=async_result.id),
+        message="摘要生成任务已提交",
+    )

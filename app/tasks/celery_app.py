@@ -33,8 +33,8 @@ _TASK_MODULES: list[str] = [
     "app.tasks.ping",
     # S3 阶段（2026-06-11 起）：文件入库管道
     "app.tasks.ingest_task",
-    # S4 阶段追加：
-    # "app.tasks.session_task",
+    # S4 阶段（2026-06-11 起）：会话标题 / 摘要异步生成
+    "app.tasks.session_task",
 ]
 
 

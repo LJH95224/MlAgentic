@@ -271,13 +271,21 @@ async def test_do_search_clamps_top_k(mock_settings, mock_embed, mock_client):
 
 
 @pytest.mark.asyncio
-async def test_do_search_exception_propagates(mock_settings, mock_embed, mock_client):
-    """Milvus 抛错时不应被本层吞掉（AGT-04 错误反思链路依赖）。"""
+async def test_do_search_exception_caught_per_collection(
+    mock_settings, mock_embed, mock_client
+):
+    """V1.5 KB-06 改造：per-collection 失败应被吞掉（warning 不抛）。
+
+    背景：KB-06 允许 kb_ids 传多个 Collection，其中一个挂了不应让其它失败。
+    AGT-04 错误反思链路改在更高层（Agent runner）实施，不在 retriever。
+    """
     mock_client.search.side_effect = RuntimeError("milvus down")
-    with pytest.raises(RuntimeError, match="milvus down"):
-        await _do_search(
-            query="x", top_k=5, doc_type=None, document_id=None, entity_tags=None
-        )
+    # 不抛，应返"无结果"提示文本（_format_hits 对空 hits 的兜底）
+    result = await _do_search(
+        query="x", top_k=5, doc_type=None, document_id=None, entity_tags=None
+    )
+    assert isinstance(result, str)
+    assert "无结果" in result or "（" in result
 
 
 # ──────────────────── @tool 装饰器集成（RAG-02 验收） ────────────────────

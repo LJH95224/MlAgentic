@@ -10,10 +10,18 @@ from pydantic import BaseModel, Field
 
 
 class ChatRequest(BaseModel):
-    """POST /api/v1/chat/stream 请求体（API-02）。"""
+    """POST /api/v1/chat/stream 请求体（API-02 + V1.5 KB-06）。"""
 
     session_id: uuid.UUID = Field(..., description="会话 ID")
     content: str = Field(..., min_length=1, description="用户输入的消息文本")
+    # V1.5 KB-06：可选传入要检索的知识库 ID 列表
+    # - None / 字段不传：使用 V1.0 默认行为（查 `knowledge_chunks` 单 Collection，向后兼容）
+    # - 空列表 []：明确表示"不查任何 KB"，retriever 直接返"无结果"
+    # - 非空：在指定的几个 KB 上跨 Collection 搜索 + 合并重排序
+    kb_ids: list[uuid.UUID] | None = Field(
+        None,
+        description="可选，指定本轮对话使用的知识库列表；不传则使用 V1.0 默认行为",
+    )
 
 
 # ──────────────── SSE 事件模型 ────────────────
@@ -44,7 +52,9 @@ class ToolStartEvent(BaseModel):
     event: Literal["control"] = "control"
     type: Literal["tool_start"] = "tool_start"
     tool: str = Field(..., description="工具名称")
-    args: dict[str, str] | None = Field(None, description="工具入参")
+    # args 类型用 Any 而非 dict[str,str]：工具入参可能含 list / dict / int 等
+    # 嵌套类型；V1.5 KB-06 还要塞 _kb_ids: list[str]
+    args: dict | None = Field(None, description="工具入参（任意 JSON 兼容字段）")
 
 
 class ToolEndEvent(BaseModel):

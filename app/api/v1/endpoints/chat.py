@@ -62,15 +62,16 @@ async def chat_stream(
         )
 
     logger.info(
-        "对话流开始 session=%s content=%.32s...",
+        "对话流开始 session=%s content=%.32s... kb_ids=%s",
         body.session_id,
         body.content,
+        body.kb_ids,
     )
 
     async def event_generator():
         """异步迭代器：将 service 层产出的 SSEEvent 序列化为 SSE data 行。"""
         async for sse_event in chat_service.stream_chat(
-            db, body.session_id, body.content
+            db, body.session_id, body.content, kb_ids=body.kb_ids
         ):
             yield {
                 "event": sse_event.event,

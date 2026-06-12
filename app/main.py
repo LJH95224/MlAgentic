@@ -11,6 +11,7 @@
 - 3.6 阶段：lifespan 启动时初始化 Neo4j（连接 + 验证 + 幂等建约束），关闭时释放。
 """
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -32,6 +33,45 @@ from app.models import ChatMessage, ChatSession, KbFile, KnowledgeBase  # noqa: 
 logger = logging.getLogger(__name__)
 
 
+async def _create_all_with_retry(max_attempts: int = 10) -> None:
+    """启动时 create_all + 重试机制。
+
+    背景：docker compose up -d 后 PG 容器进程虽然马上有了，但 PG 数据库内部
+    还在做 startup recovery，此时连接会被拒绝（SQLSTATE 57P03 "the database
+    system is starting up"）。容器健康检查通过前 uvicorn 启动太早就会撞上。
+
+    重试 10 次 × 2s 间隔 = 给 PG 最多 20s 启动时间，覆盖绝大多数场景。
+    每次重试前 dispose 一下连接池，避免复用挂掉的连接。
+    """
+    last_err: Exception | None = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            async with engine.begin() as conn:
+                await conn.run_sync(Base.metadata.create_all)
+            return
+        except Exception as e:  # noqa: BLE001
+            msg = str(e).lower()
+            # 只对"PG 启动中"这一种错误重试；其它错误（认证失败、库不存在等）直接抛
+            if "starting up" not in msg and "cannotconnectnowerror" not in msg.replace(
+                " ", ""
+            ).lower():
+                raise
+            last_err = e
+            if attempt < max_attempts:
+                logger.warning(
+                    "PG 还在启动中（第 %d/%d 次重试，2s 后再试）: %s",
+                    attempt,
+                    max_attempts,
+                    e,
+                )
+                await asyncio.sleep(2)
+                try:
+                    await engine.dispose()
+                except Exception:  # noqa: BLE001
+                    pass
+    raise last_err  # type: ignore[misc]
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期：启动建表 + 初始化 Milvus + Neo4j；关闭时反向释放。"""
@@ -41,8 +81,8 @@ async def lifespan(app: FastAPI):
     logger.info("应用启动 env=%s debug=%s", settings.app_env, settings.app_debug)
 
     # 启动时建表（开发态，不替代 alembic）
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    # 带 PG 启动期重试，规避 docker compose 刚拉起 PG 还在 startup recovery 的窗口
+    await _create_all_with_retry()
     logger.info("数据库表初始化完成")
 
     # Milvus 初始化（同步调用，启动期 < 1s 可接受）

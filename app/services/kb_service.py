@@ -382,10 +382,33 @@ def _cleanup_kb_upload_dir(kb_id: uuid.UUID) -> None:
 async def count_entities_for_kb(kb_id: uuid.UUID) -> int:
     """查询指定 KB 在 Neo4j 中的 Entity 节点数（KB-03 详情用）。
 
-    S2 阶段 stub 返回 0；S5 阶段（KB 关联对话）接通 Neo4j 时改为实查。
-    保持函数签名独立，调用方（endpoint）无需感知变化。
+    V1.5 S5：接通 Neo4j 真实查询（S2 阶段的 stub 已拆掉）。
+    失败仅记 warning 返 0，不抛错（KB-03 详情接口不应因 Neo4j 抖动 500）。
     """
-    # S5 实现示例（参考）：
-    # from app.kg.query import count_entities_by_kb
-    # return await count_entities_by_kb(kb_id)
-    return 0
+    try:
+        from app.core.config import get_settings
+        from app.kg.neo4j_client import get_neo4j_driver
+    except ImportError as e:
+        logger.warning("count_entities_for_kb: Neo4j 驱动不可用 → 0：%s", e)
+        return 0
+
+    try:
+        driver = get_neo4j_driver()
+    except RuntimeError as e:
+        logger.warning(
+            "count_entities_for_kb: Neo4j 未初始化 kb_id=%s → 0: %s", kb_id, e
+        )
+        return 0
+
+    settings = get_settings()
+    cypher = "MATCH (e:Entity {kb_id: $kb_id}) RETURN count(e) AS n"
+    try:
+        async with driver.session(database=settings.neo4j_database) as sess:
+            result = await sess.run(cypher, kb_id=str(kb_id))
+            rec = await result.single()
+            return int(rec["n"]) if rec else 0
+    except Exception as e:  # noqa: BLE001
+        logger.warning(
+            "count_entities_for_kb: 查询失败 kb_id=%s err=%s → 0", kb_id, e
+        )
+        return 0

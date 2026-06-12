@@ -35,8 +35,8 @@
 | S1 | 会话管理 CRUD（不含异步任务） | SES-01 ~ SES-06 / SES-09 | ✅ 完成 + 集成测试验收 | 2026-06-11 |
 | S2 | 知识库 CRUD + Milvus 多 Collection | KB-01 ~ KB-05 | ✅ 完成 + 集成测试验收 | 2026-06-11 |
 | S3 | 文件上传 + 异步入库（核心） | FILE-01 ~ FILE-05 / TASK-02 / TASK-03 | ✅ 完成 + 端到端 smoke 验收 | 2026-06-11 |
-| S4 | 会话标题/摘要异步生成 | SES-07 / SES-08 / TASK-04 / TASK-05 | ⏳ 待开始 | — |
-| S5 | KB 关联对话 + 端到端联调 | KB-06 | ⏳ 待开始 | — |
+| S4 | 会话标题/摘要异步生成 | SES-07 / SES-08 / TASK-04 / TASK-05 | ✅ 完成 + 全链路 smoke 间接验收 | 2026-06-11 |
+| S5 | KB 关联对话 + 端到端联调 | KB-06 | ✅ 完成 + 全链路 smoke 验收（1:44） | 2026-06-12 |
 
 ---
 
@@ -442,6 +442,33 @@ python scripts/kg_smoke.py
 
 ## 历史变更
 
+- **2026-06-12**：V1.5 全链路 smoke 端到端验收通过 ✅✅✅
+  - 6 个阶段 6/6 完成；mock 420 用例全过，集成测试 37/37 全过，**端到端真实跑通**
+  - smoke 数据：2 个 KB / 2 份气象文档（docx + md）/ 真实入库 22 chunks + 60+ 实体 / 3 轮真 LLM 对话 / 全链路 1:44
+  - 4 条 PRD 用户需求 100% 验证：KB CRUD / 上传指定 KB / 文件增删查 / 删除时三库联动清理
+  - 联调阶段修补：[app/main.py](../app/main.py) lifespan 加 PG 启动重试（10×2s），规避 `the database system is starting up` 启动期窗口
+  - 项目记忆 7 条、Celery worker 同步 / PG 多次 / NER 软失败 / Milvus 字节截断等关键工程坑全部固化
+- **2026-06-11**：V1.5 S5 KB-06 关联对话完成（mock 全过，端到端 smoke 待用户跑）
+  - 新增 [app/agent/context.py](../app/agent/context.py)：request-scoped contextvar `current_kb_ids` 三态语义（None / [] / [...]），与 `get_current_role()` 同款"业务上下文不暴露给 LLM"模式
+  - 扩展 [app/schemas/chat.py](../app/schemas/chat.py) `ChatRequest` 加 `kb_ids: list[UUID] | None`；`ToolStartEvent.args` 类型放宽到 `dict`（容纳 `_kb_ids` 等嵌套值）
+  - 改造 [app/rag/retriever.py](../app/rag/retriever.py) `_do_search`：根据 contextvar 决定查默认 Collection / 跳过 / 跨 KB Collection 查询 + score 合并重排；per-collection 失败仅 warning 不阻断其它 KB
+  - 改造 [app/kg/query.py](../app/kg/query.py) `build_cypher` + `execute_graph_query` 接收 `kb_ids`，追加 `WHERE start.kb_id IN $kb_ids` 过滤
+  - 改造 [app/kg/tool.py](../app/kg/tool.py) `query_knowledge_graph` 从 contextvar 读 kb_ids，kb_ids=[] 时直接早返不碰 Neo4j
+  - 改造 [app/services/chat_service.py](../app/services/chat_service.py) `stream_chat` 加 `kb_ids` 参数，try/finally 注入与重置 contextvar；ToolStartEvent.args 注入 `_kb_ids` 信息（KB-06 验收点）
+  - 改造 [app/api/v1/endpoints/chat.py](../app/api/v1/endpoints/chat.py) 把 `body.kb_ids` 透传给 service
+  - 解开 [app/services/kb_service.py](../app/services/kb_service.py) `count_entities_for_kb` 的 S2 stub，接通 Neo4j 真实 `MATCH (e:Entity {kb_id}) RETURN count(e)`
+  - 新增 [tests/test_kb06_chat_scope.py](../tests/test_kb06_chat_scope.py) **19 用例**（contextvar 三态/ChatRequest 校验/retriever 跨 collection/per-collection 容错/合并重排/KG cypher 拼接/KG tool 三态）
+  - 修旧 [tests/test_rag_retriever.py](../tests/test_rag_retriever.py) `test_do_search_exception_caught_per_collection` 以符合 KB-06 容错策略
+  - 新增 [scripts/v1_5_smoke.py](../scripts/v1_5_smoke.py)：V1.5 全链路 smoke（2 KB / 2 上传 / 3 轮对话验 kb_ids 三态 / 验 tool_start 携带 _kb_ids）
+  - mock 全量回归 **420 passed**（401 → 420，零回归）
+- **2026-06-11**：V1.5 S4 标题/摘要异步生成完成（待端到端 smoke）
+  - 新增 [app/tasks/session_task.py](../app/tasks/session_task.py)：两个 Celery 任务（title / summary），独立 LLM 模型配置（SESSION_TITLE_MODEL / SESSION_SUMMARY_MODEL 缺省回退 LITELLM_MODEL），LLM 输出清洗（去引号/markdown/标点/截 20-200 字），摘要超长 SUMMARY_INPUT_CHAR_LIMIT=28k 字符直接 failed（dev_plan S4 决策）
+  - 改造 [app/services/chat_service.py](../app/services/chat_service.py) `stream_chat` 流末尾：`_maybe_trigger_title_task` 判 `title is None AND message_count == 2` 时异步触发标题任务；任务里再判一次防并发竞态；写 title/summary 时**不 touch updated_at**（避免异步任务把会话顶到列表第一位）
+  - 新增 endpoint [POST /api/v1/sessions/{id}/summarize](../app/api/v1/endpoints/sessions.py)：202 + task_id 立即返；Celery 不可达 → 50300
+  - 注册到 [_TASK_MODULES](../app/tasks/celery_app.py) 让 worker 自动发现
+  - 新增 [tests/test_session_task.py](../tests/test_session_task.py) **24 用例**（清洗/skip 分支/超长/happy path/异常包装）
+  - 新增 [tests/test_s4_session_async.py](../tests/test_s4_session_async.py) **9 用例**（endpoint 202/404/503 + chat_service 触发判断）
+  - mock 全量回归 **401 passed**（368 → 401，零回归）
 - **2026-06-11**：V1.5 S3 阶段端到端 smoke 验收通过 ✅
   - 真实气象论文 PDF 端到端跑通：56 chunks / 613 entities / 457 唯一实体 → Milvus + Neo4j 双库写入；删除后三库 + 磁盘全清；总耗时 ~60s
   - PRD 用户 4 条需求 100% 验证：KB CRUD / 上传指定 KB / 文件增删查 / **删除时三库联动清理**
