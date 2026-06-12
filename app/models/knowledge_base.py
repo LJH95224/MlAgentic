@@ -1,4 +1,4 @@
-"""knowledge_bases 表：知识库元数据（V1.5 PRD §5.2）。
+"""knowledge_bases 表：知识库元数据（V1.5 PRD §5.2 + V2.0 扩展）。
 
 每个知识库对应：
 - 一张 Milvus Collection（命名 `kb_{kb_id_no_hyphen}`，详见 app/rag/naming.py）
@@ -6,11 +6,16 @@
 
 字段全部按 PRD §5.2 落地。`embedding_dim / chunk_size / chunk_overlap` 创建后只读
 （KB-04 明确要求）。
+
+V2.0 新增字段（T0.2）：
+- retrieval_config: JSONB — 混合检索配置（BM25 权重 / Reranker 开关 / top_k 等）
+- doc_metadata_schema: JSONB — 文档元数据模板（IDP-05 双层索引用）
 """
 
 from datetime import datetime
 
 from sqlalchemy import CheckConstraint, DateTime, Integer, String, Text, func
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, UUIDMixin
@@ -100,6 +105,22 @@ class KnowledgeBase(UUIDMixin, Base):
         server_default=func.now(),
         nullable=False,
         comment="创建时间",
+    )
+
+    # ── V2.0 新增字段（T0.2） ──
+
+    retrieval_config: Mapped[dict | None] = mapped_column(
+        JSONB,
+        nullable=True,
+        default=None,
+        comment="V2.0 混合检索配置（bm25_weight / reranker_enable / top_k 等）",
+    )
+
+    doc_metadata_schema: Mapped[dict | None] = mapped_column(
+        JSONB,
+        nullable=True,
+        default=None,
+        comment="V2.0 文档元数据模板（IDP-05 双层索引，定义可提取的元数据字段）",
     )
 
     __table_args__ = (

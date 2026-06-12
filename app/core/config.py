@@ -94,6 +94,34 @@ class Settings(BaseSettings):
     skip_ner: bool = Field(default=False, alias="SKIP_NER")
 
     # ============================================================
+    # V2.0 新增（Hermes · 2026-06-12 起启用）
+    # ============================================================
+
+    # --- Reranker 精排（HRE-05） ---
+    # none = 开发期跳过精排；api = 通过 LiteLLM 走在线 Reranker API（推荐起步）
+    reranker_type: str = Field(default="none", alias="RERANKER_TYPE")
+    # 推荐起步：SiliconFlow BAAI/bge-reranker-v2-m3
+    reranker_model: str | None = Field(default=None, alias="RERANKER_MODEL")
+    reranker_api_key: str | None = Field(default=None, alias="RERANKER_API_KEY")
+    reranker_api_base: str | None = Field(default=None, alias="RERANKER_API_BASE")
+    # Reranker 相似度阈值（低于此分数的 chunk 被过滤，默认 0.3）
+    reranker_similarity_threshold: float = Field(
+        default=0.3, alias="RERANKER_SIMILARITY_THRESHOLD"
+    )
+
+    # --- BM25 混合检索（HRE-03/04） ---
+    # 启用后，入库时同时写入稀疏向量（BM25），检索时向量+BM25 双路 RRF 融合
+    bm25_enable: bool = Field(default=True, alias="BM25_ENABLE")
+    # RRF 融合常数 k（默认 60，标准值）
+    rrf_k: int = Field(default=60, alias="RRF_K")
+
+    # --- Trace 可观测性（OBS-01/02） ---
+    # 启用后，每次 /v2/query 调用自动写 trace 到 agent_traces 表
+    trace_enable: bool = Field(default=True, alias="TRACE_ENABLE")
+    # Trace 数据保留天数（过期记录由定期清理 cron 清理，T12 阶段实现）
+    trace_retention_days: int = Field(default=90, alias="TRACE_RETENTION_DAYS")
+
+    # ============================================================
     # V1.5 新增（数据管理层 · 2026-06-11 起启用）
     # ============================================================
 

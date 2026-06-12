@@ -6,8 +6,12 @@
 > **配套文档**：
 > - [architecture.md](architecture.md) — 技术架构、数据流转、关键设计决策
 > - [TyAgent V1.0 需求规格说明书](TyAgent%20V1.0%20%28%E5%9F%BA%E7%A1%80%E5%BA%95%E5%BA%A7%29%20%E9%9C%80%E6%B1%82%E8%A7%84%E6%A0%BC%E8%AF%B4%E6%98%8E%E4%B9%A6.md) — V1.0 PRD（基础底座，已完成）
-> - **[TyAgent V1.5 · 需求规格说明书](TyAgent%20V1.5%20%C2%B7%20%E9%9C%80%E6%B1%82%E8%A7%84%E6%A0%BC%E8%AF%B4%E6%98%8E%E4%B9%A6.md)** — V1.5 PRD（当前迭代，数据管理层）
-> - **[v1.5_dev_plan.md](v1.5_dev_plan.md)** — V1.5 开发拆分计划（子需求 ID + 依赖 + 阶段）
+> - [TyAgent V1.5 · 需求规格说明书](TyAgent%20V1.5%20%C2%B7%20%E9%9C%80%E6%B1%82%E8%A7%84%E6%A0%BC%E8%AF%B4%E6%98%8E%E4%B9%A6.md) — V1.5 PRD（数据管理层，已完成）
+> - [v1.5_dev_plan.md](v1.5_dev_plan.md) — V1.5 开发拆分计划（已完成存档）
+> - **[TyAgent V2.0 · 需求规格说明书](TyAgent%20V2.0%20%C2%B7%20%E9%9C%80%E6%B1%82%E8%A7%84%E6%A0%BC%E8%AF%B4%E6%98%8E%E4%B9%A6.md)** — V2.0 (Hermes) PRD（当前迭代，专业级 RAG 引擎）
+> - **[v2_dev_plan.md](v2_dev_plan.md)** — V2.0 开发拆分计划（T0~T12，按 PRD §8 优先级链推进）
+> - [v1_5_api_reference.md](v1_5_api_reference.md) — V1.5 接口参考
+> - [v1_5_frontend_guide.md](v1_5_frontend_guide.md) — V1.5 前端模块拆解
 > - [embedding.md](embedding.md) — Embedding 模型选型对比
 
 ---
@@ -25,9 +29,9 @@
 
 ---
 
-## V1.5 数据管理层（进行中 🔧）
+## V1.5 数据管理层（已完成 ✅）
 
-> **当前迭代起点：2026-06-11**。详细拆分见 [v1.5_dev_plan.md](v1.5_dev_plan.md)。
+> **迭代完成日期：2026-06-12**。端到端 smoke 全链路验收通过。详细拆分见 [v1.5_dev_plan.md](v1.5_dev_plan.md)。
 
 | 阶段 | 模块 | PRD 子需求 | 状态 | 完成日期 |
 |---|---|---|---|---|
@@ -37,6 +41,127 @@
 | S3 | 文件上传 + 异步入库（核心） | FILE-01 ~ FILE-05 / TASK-02 / TASK-03 | ✅ 完成 + 端到端 smoke 验收 | 2026-06-11 |
 | S4 | 会话标题/摘要异步生成 | SES-07 / SES-08 / TASK-04 / TASK-05 | ✅ 完成 + 全链路 smoke 间接验收 | 2026-06-11 |
 | S5 | KB 关联对话 + 端到端联调 | KB-06 | ✅ 完成 + 全链路 smoke 验收（1:44） | 2026-06-12 |
+
+---
+
+## V2.0 Hermes — 专业级 RAG 引擎（进行中 🔧）
+
+> **迭代起点：2026-06-12**。V1.5 全链路 smoke 已通过作为底座。详细拆分见 [v2_dev_plan.md](v2_dev_plan.md)。
+>
+> **核心目标**：把 RAG 从"能跑通"升级为"效果可信赖"——智能切片 + BM25/RRF 混合检索 + Reranker 精排 + Citation 溯源 + RAGAS 评估 + Trace 可观测。
+
+| 阶段 | 模块 | PRD 子需求 | 优先级 | 状态 | 完成日期 |
+|---|---|---|---|---|---|
+| T0 | 基础设施扩展（Milvus 升级 / BM25 / trace 表 / eval 表） | P0 前置 | P0 | ✅ 完成 + 单测验收 | 2026-06-12 |
+| T1 | IDP-01/02/06（结构感知解析 + 切片 + 入库管道重构） | P0 | P0 | ✅ 完成 + 单测验收 | 2026-06-12 |
+| T2 | HRE-03/04（BM25 + RRF 融合） | P0 | P0 | ✅ 完成 + 单测验收 | 2026-06-12 |
+| T3 | OBS-01/02（Trace 采集 + 查询接口） | P0 | P0 | ⬜ 待开始 | — |
+| T4 | HRE-05（Reranker 精排） | P1 | P1 | ⬜ 待开始 | — |
+| T5 | CHC-01/02（Citation 注入 + 解析） | P1 | P1 | ⬜ 待开始 | — |
+| T6 | UQA-01（统一查询接口 /v2/query） | P1 | P1 | ⬜ 待开始 | — |
+| T7 | IDP-03/04/05（表格描述 + 双层索引 + 文档元数据） | P2 | P2 | ⬜ 待开始 | — |
+| T8 | HRE-01/02/06（Query 改写 + NER + 配置项） | P2 | P2 | ⬜ 待开始 | — |
+| T9 | CHC-03/04（置信度 + 答案自检） | P2 | P2 | ⬜ 待开始 | — |
+| T10 | UQA-02/03/04（分层子接口） | P3 | P3 | ⬜ 待开始 | — |
+| T11 | EVA-01/02/03（RAGAS 评估） | P3 | P3 | ⬜ 待开始 | — |
+| T12 | OBS-03（聚合统计） | P4 | P4 | ⬜ 待开始 | — |
+
+### 已确认的关键决策
+
+| 决策点 | 选择 | 影响 |
+|---|---|---|
+| BM25 方案 | Milvus 2.5+ 稀疏向量 | 升级 Milvus 镜像；同 Collection 稠密+稀疏 |
+| Reranker 方案 | 在线 API（LiteLLM 网关） | 优先 SiliconFlow `BAAI/bge-reranker-v2-m3` |
+| V1.5 KB 数据 | 清空重来（用户已确认） | V2 上线删 milvus volume + drop_all PG |
+| RAGAS 评估 | 官方 ragas 库 | `pip install ragas`；适配 LiteLLM 代理 |
+
+### T0 · 基础设施扩展 ✅（2026-06-12）
+
+#### 交付内容
+
+| 子任务 | 实现位置 | 备注 |
+|---|---|---|
+| **T0.1 配置项扩展** | [app/core/config.py](../app/core/config.py)（新增 8 字段：reranker_type/model/api_key/api_base/similarity_threshold + bm25_enable + rrf_k + trace_enable/retention_days） | V2.0 区段 |
+| **T0.1 .env.example 同步** | [.env.example](../.env.example)（追加 V2.0 配置块） | 含注释说明 |
+| **T0.1 依赖追加** | [requirements.txt](../requirements.txt)（追加 jieba>=0.42.1 + ragas>=0.2.0） | 用户手动 `uv pip install` |
+| **T0.2 AgentTrace 新表** | [app/models/agent_trace.py](../app/models/agent_trace.py)（13 字段：trace_id / session_id / kb_id / step_type / parent_step / step_latency_ms / total_latency_ms / step_input(JSONB) / step_output(JSONB) / model_name / token_count / error_message / created_at） | OBS-01 Trace 记录 |
+| **T0.2 EvalTask 新表** | [app/models/eval_task.py](../app/models/eval_task.py)（12 字段：kb_id / name / status / progress / eval_dataset(JSONB) / eval_result(JSONB) / eval_config(JSONB) / question_count / error_message / created_at / completed_at） | EVA-01/02/03 评估任务 |
+| **T0.2 KB 扩展字段** | [app/models/knowledge_base.py](../app/models/knowledge_base.py)（+retrieval_config JSONB / +doc_metadata_schema JSONB） | V2.0 混合检索配置 + 文档元数据模板 |
+| **T0.2 KbFile 扩展字段** | [app/models/kb_file.py](../app/models/kb_file.py)（+doc_metadata JSONB / +summary_brief Text） | V2.0 文档元数据 + 摘要 |
+| **T0.2 模型注册** | [app/models/__init__.py](../app/models/__init__.py)（新增 AgentTrace / EvalTask） | lifespan create_all 自动建表 |
+| **T0.3 V2 Milvus Schema** | [app/rag/schema.py](../app/rag/schema.py)（`build_v2_kb_collection_schema` + `build_v2_index_params`） | 7 新字段 + SPARSE_FLOAT_VECTOR + SPARSE_INVERTED_INDEX BM25 |
+| **T0.3 V2 KB Collection 创建** | [app/rag/milvus_client.py](../app/rag/milvus_client.py)（`create_v2_kb_collection`） | 幂等创建 + load |
+| **T0.3 RAG 模块导出** | [app/rag/__init__.py](../app/rag/__init__.py)（新增 `create_v2_kb_collection` 导出） | — |
+| **T0.4 单测** | [tests/test_v2_t0.py](../tests/test_v2_t0.py)（52 用例） | 配置项 + PG 模型 + V2 Schema + 索引 + V1.5 零回归 |
+
+#### 关键设计决策
+
+1. **Milvus 镜像不升级**：当前已用 `v2.6.18`（> 2.5），原生支持稀疏向量 + BM25，无需升级
+2. **V1.5 `/api/v1/...` 完全不动**：`create_kb_collection` 继续用 V1.5 Schema，V2 用独立的 `create_v2_kb_collection`
+3. **稀疏向量用 SPARSE_FLOAT_VECTOR**：Milvus 2.5+ 原生类型，索引走 SPARSE_INVERTED_INDEX + BM25 metric
+4. **drop_ratio_build=0.2**：建索引时丢弃低频词后 20%，减小体积；后续可根据实际数据调优
+5. **V2 Schema 总共 15 字段**：V1.5 的 8 个 + V2 新增 7 个（heading_path / block_type / page_number / position_index / parent_chunk_id / is_summary / sparse_vector）
+
+#### 验证状态
+
+- ✅ T0 单测 **52/52 通过**
+- ✅ V1.5 全量回归 **472 passed + 6 skipped**（420 → 472，零回归）
+- ⬜ 用户手动验证：清 milvus volume + 重启容器 + uvicorn 启动看到新表自动创建
+
+### T1 · 智能文档处理 ✅（2026-06-12）
+
+#### 交付内容
+
+| 子任务 | 实现位置 | 备注 |
+|---|---|---|
+| **T1.1 IDP-01 结构感知解析** | [app/ingest/parser.py](../app/ingest/parser.py)（`StructuredBlock` 数据类 + `parse_document_structured()` + 4 个结构感知解析器） | PDF 按字号/粗体推断标题；DOCX 读 style；MD token 对应；TXT 按段 |
+| **T1.2 IDP-02 结构感知切片** | [app/ingest/structured_splitter.py](../app/ingest/structured_splitter.py)（`StructuredChunk` + `split_structured_blocks()`） | 代码块/表格整块保留 → 标题段落组合 → 超长段落 RecursiveCharacterTextSplitter 兜底 |
+| **T1.3 IDP-06 入库管道重构** | [app/tasks/ingest_task.py](../app/tasks/ingest_task.py)（7步→11步；Step 4/5/6/10 noop） | V1.5 版归档为 [ingest_task_v1.py](../app/tasks/ingest_task_v1.py) |
+| **T1.3 Milvus V2 写入** | ingest_task `_step_milvus_write_v2`（15 字段，含 heading_path / block_type / sparse_vector） | sparse_vector 暂写空（T2 填实） |
+| **T1.4 单测** | [tests/test_v2_t1.py](../tests/test_v2_t1.py)（50 用例） | 解析/切片/管道/V1.5 兼容 |
+| **V1.5 测试兼容** | [tests/test_ingest_task.py](../tests/test_ingest_task.py)（已适配 V2 API） | `_make_chunk_id` → `_make_chunk_id_int`；`parse_document` → `parse_document_structured` |
+
+#### 关键设计决策
+
+1. **V1.5 `parse_document()` 完全不动**：保留原始 V1.5 纯文本解析器实现，V2 新增独立的 `parse_document_structured()` 入口
+2. **代码块/表格不可切断**：IDP-02 核心策略——代码块和表格无论多长都整块保留为一个 chunk
+3. **heading_path 取最完整路径**：标题+段落组合 chunk 时，heading_path 取段落块的（含标题自身），而非标题块的（不含自身）
+4. **MD 表格需 `.enable("table")`**：markdown-it-py 默认不解析表格，需显式启用
+5. **V1.5 ingest_task 归档**：`ingest_task_v1.py` 保留供参考但不再使用
+
+#### 验证状态
+
+- ✅ T1 单测 **50/50 通过**
+- ✅ V1.5 全量回归 **522 passed + 6 skipped**（472 → 522，零回归）
+- ⬜ 集成测试：上传带标题/表格/代码的 PDF → V2 KB → Milvus chunks 含 heading_path + block_type
+
+### T2 · 混合检索引擎 ✅（2026-06-12）
+
+#### 交付内容
+
+| 子任务 | 实现位置 | 备注 |
+|---|---|---|
+| **T2.1 V2 Schema BM25 Function** | [app/rag/schema.py](../app/rag/schema.py)（content 字段加 `enable_analyzer=True` + BM25 Function `content→sparse_vector`） | Milvus 插入时自动生成稀疏向量，无需手动计算 |
+| **T2.1 索引参数 BM25 k1/b** | schema.py `build_v2_index_params`（bm25_k1=1.2 / bm25_b=0.75 / drop_ratio_build=0.2） | 经典 BM25 标准参数 |
+| **T2.1 入库管道适配** | [app/tasks/ingest_task.py](../app/tasks/ingest_task.py)（移除手动 `sparse_vector: {}`；Step 10 改为确认步骤） | Milvus BM25 Function 在 Step 8 插入时自动生成稀疏向量 |
+| **T2.2 混合检索引擎** | [app/rag/hybrid_retriever.py](../app/rag/hybrid_retriever.py)（`HybridSearchResult` + `hybrid_search()` + `format_hybrid_results()`） | dense + BM25 双路 + RRFRanker 融合 |
+| **T2.2 降级策略** | hybrid_retriever.py：BM25 失败→纯向量检索；bm25_enable=False→纯向量检索 | 保障可用性 |
+| **T2.3 单测** | [tests/test_v2_t2.py](../tests/test_v2_t2.py)（17 用例） | Schema BM25 + 混合检索 + 降级 + 格式化 + V2 写入验证 |
+
+#### 关键设计决策
+
+1. **Milvus 内置 BM25 Function**：不用 jieba 手动计算稀疏向量。在 Schema 中声明 `Function(content→sparse_vector, BM25)`，插入时 Milvus 自动分词+计算；查询时直接传原始文本
+2. **content 字段 `enable_analyzer=True`**：BM25 Function 的前提条件，让 Milvus 在插入时对文本做分词
+3. **写入时不包含 sparse_vector**：插入数据中不应有 `sparse_vector` 字段，由 BM25 Function 自动生成
+4. **RRF k=60**：学术标准值，可通过 `RRF_K` 配置调整
+5. **hybrid_search API**：使用 `AnnSearchRequest` + `RRFRanker` 一次性查询双路，比应用层融合更高效
+6. **V2 Schema 不再复用 V1.5 base_fields**：因为 content 字段需要 `enable_analyzer=True`，与 V1.5 的 content 字段定义不同
+
+#### 验证状态
+
+- ✅ T2 单测 **17/17 通过**
+- ✅ V1.5 全量回归 **539 passed + 6 skipped**（522 → 539，零回归）
+- ⬜ 集成测试：上传中英混合文档 → 查"bge-reranker-v2"（专有名词）→ BM25 路径召回成功
 
 ---
 
@@ -442,6 +567,7 @@ python scripts/kg_smoke.py
 
 ## 历史变更
 
+- **2026-06-12**：V2.0 Hermes 迭代启动，T0 基础设施扩展进行中
 - **2026-06-12**：V1.5 全链路 smoke 端到端验收通过 ✅✅✅
   - 6 个阶段 6/6 完成；mock 420 用例全过，集成测试 37/37 全过，**端到端真实跑通**
   - smoke 数据：2 个 KB / 2 份气象文档（docx + md）/ 真实入库 22 chunks + 60+ 实体 / 3 轮真 LLM 对话 / 全链路 1:44

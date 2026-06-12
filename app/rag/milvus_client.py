@@ -23,6 +23,8 @@ from app.rag.schema import (
     build_index_params,
     build_kb_collection_schema,
     build_knowledge_chunks_schema,
+    build_v2_index_params,
+    build_v2_kb_collection_schema,
 )
 
 if TYPE_CHECKING:
@@ -238,6 +240,74 @@ def kb_collection_exists(kb_id: uuid.UUID | str) -> bool:
     return client.has_collection(build_kb_collection_name(kb_id))
 
 
+# ──────────────── V2.0 KB Collection 生命周期 ────────────────
+
+
+def create_v2_kb_collection(
+    kb_id: uuid.UUID | str,
+    dim: int | None = None,
+) -> str:
+    """为指定知识库创建 V2.0 版 Milvus Collection（T0.3）。
+
+    V2.0 与 V1.5 的差异：
+    - Schema 新增 7 个字段（heading_path / block_type / page_number / position_index /
+      parent_chunk_id / is_summary / sparse_vector）
+    - 索引新增 SPARSE_INVERTED_INDEX + BM25（用于混合检索）
+
+    同步完成：
+      1. 创建 Collection（schema 见 build_v2_kb_collection_schema）
+      2. 建 HNSW 稠密向量索引 + SPARSE_INVERTED_INDEX BM25 稀疏向量索引 + INVERTED document_id 索引
+      3. load_collection 加载到内存
+
+    幂等：Collection 已存在 → 直接 load 并返回 collection name；不报错。
+
+    Args:
+        kb_id: 知识库 UUID
+        dim: 向量维度；缺省使用 settings.embedding_dimension
+
+    Returns:
+        Collection 名（形如 "kb_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"）
+
+    Raises:
+        RuntimeError: Milvus 未初始化 / 建 Collection 失败
+    """
+    client = get_milvus_client()
+    settings = get_settings()
+    effective_dim = dim if dim is not None else settings.embedding_dimension
+
+    collection_name = build_kb_collection_name(kb_id)
+
+    if client.has_collection(collection_name):
+        logger.info("V2 KB Collection '%s' 已存在，直接 load", collection_name)
+    else:
+        logger.info(
+            "V2 KB Collection '%s' 不存在，创建 V2 Schema(dim=%d) + 索引",
+            collection_name,
+            effective_dim,
+        )
+        schema = build_v2_kb_collection_schema(dim=effective_dim)
+        index_params = build_v2_index_params(client)
+
+        try:
+            client.create_collection(
+                collection_name=collection_name,
+                schema=schema,
+                index_params=index_params,
+            )
+        except Exception as e:
+            raise RuntimeError(
+                f"创建 V2 KB Collection 失败 name={collection_name}: {e}"
+            ) from e
+
+        logger.info("V2 KB Collection '%s' 创建完成", collection_name)
+
+    # load_collection 幂等
+    client.load_collection(collection_name)
+    logger.info("V2 KB Collection '%s' 已加载到内存", collection_name)
+
+    return collection_name
+
+
 __all__ = [
     "init_milvus",
     "get_milvus_client",
@@ -246,4 +316,6 @@ __all__ = [
     "create_kb_collection",
     "drop_kb_collection",
     "kb_collection_exists",
+    # V2.0 KB Collection 生命周期
+    "create_v2_kb_collection",
 ]

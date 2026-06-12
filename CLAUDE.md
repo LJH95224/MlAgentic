@@ -7,10 +7,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 **任何编码任务开始前，必须按此顺序阅读**：
 
 1. [docs/progress.md](docs/progress.md) —— **当前进度文档**：了解项目实现到哪一步、各模块状态、关键文件位置、待办清单。
-2. **当前迭代 PRD（V1.5，进行中）**：[docs/TyAgent V1.5 · 需求规格说明书.md](docs/TyAgent%20V1.5%20%C2%B7%20%E9%9C%80%E6%B1%82%E8%A7%84%E6%A0%BC%E8%AF%B4%E6%98%8E%E4%B9%A6.md) —— 会话/知识库/文件管理 + 异步任务全链路。
-3. **基线 PRD（V1.0，已完成）**：[docs/GeoAgent V1.0 (基础底座) 需求规格说明书.md](docs/GeoAgent%20V1.0%20%28%E5%9F%BA%E7%A1%80%E5%BA%95%E5%BA%A7%29%20%E9%9C%80%E6%B1%82%E8%A7%84%E6%A0%BC%E8%AF%B4%E6%98%8E%E4%B9%A6.md) —— ReAct Agent 基础底座（已 100% 通过）。
-4. **V1.5 开发拆分计划**：[docs/v1.5_dev_plan.md](docs/v1.5_dev_plan.md) —— 按 SES/KB/FILE/TASK 子需求 ID 拆分的实施步骤与依赖关系。
-5. [environment_guide_zh.md](environment_guide_zh.md) —— Conda + uv 混合环境管理规范。
+2. **当前迭代 PRD（V2.0 Hermes，进行中）**：[docs/TyAgent V2.0 · 需求规格说明书.md](docs/TyAgent%20V2.0%20%C2%B7%20%E9%9C%80%E6%B1%82%E8%A7%84%E6%A0%BC%E8%AF%B4%E6%98%8E%E4%B9%A6.md) —— 智能切片 + 混合检索 + 答案溯源 + 评估 + Trace。
+3. **V2.0 开发拆分计划**：[docs/v2_dev_plan.md](docs/v2_dev_plan.md) —— 按 T0~T12 阶段拆分（P0/P1/P2/P3+）+ 4 个关键决策。
+4. **基线 PRD（V1.5，已完成）**：[docs/TyAgent V1.5 · 需求规格说明书.md](docs/TyAgent%20V1.5%20%C2%B7%20%E9%9C%80%E6%B1%82%E8%A7%84%E6%A0%BC%E8%AF%B4%E6%98%8E%E4%B9%A6.md) —— 会话/知识库/文件管理 + 异步任务全链路（端到端 smoke 已过）。
+5. **基线 PRD（V1.0，已完成）**：[docs/GeoAgent V1.0 (基础底座) 需求规格说明书.md](docs/GeoAgent%20V1.0%20%28%E5%9F%BA%E7%A1%80%E5%BA%95%E5%BA%A7%29%20%E9%9C%80%E6%B1%82%E8%A7%84%E6%A0%BC%E8%AF%B4%E6%98%8E%E4%B9%A6.md) —— ReAct Agent 基础底座（已 100% 通过）。
+6. [environment_guide_zh.md](environment_guide_zh.md) —— Conda + uv 混合环境管理规范。
 
 **任何模块完成（或对已完成模块做实质性改动）后，必须同步更新 [docs/progress.md](docs/progress.md)**：
 - 把对应模块状态改为 ✅，填入完成日期
@@ -25,7 +26,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 **TyAgent / GeoAgent** —— 面向气象空间智能的 Agent 后端引擎。
 
 - **V1.0（基础底座，已完成）**：ReAct Agent + Agentic RAG（Milvus）+ Graph RAG（Neo4j），10 条验收项全过。
-- **V1.5（当前迭代）**：在底座之上构建**数据管理层** —— 会话生命周期、多知识库空间、文件上传异步入库、Celery 任务队列。详见 [docs/v1.5_dev_plan.md](docs/v1.5_dev_plan.md)。
+- **V1.5（数据管理层，已完成 2026-06-11）**：会话生命周期、多知识库空间、文件上传异步入库、Celery 任务队列。**端到端 smoke 验收通过**。
+- **V2.0 Hermes（当前迭代）**：把 RAG 从"能跑通"升级为"效果可信赖"——智能切片 + BM25/RRF 混合检索 + Reranker 精排 + Citation 溯源 + RAGAS 评估 + Trace 可观测。详见 [docs/v2_dev_plan.md](docs/v2_dev_plan.md)。
 
 ## 目标技术栈（PRD 强制）
 

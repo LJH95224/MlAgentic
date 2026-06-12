@@ -17,8 +17,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from app.ingest.parser import ParseError
+from app.ingest.parser import ParseError, StructuredBlock
 from app.ingest.splitter import Chunk
+from app.ingest.structured_splitter import StructuredChunk
 from app.models.kb_file import (
     FILE_STATUS_COMPLETED,
     FILE_STATUS_FAILED,
@@ -65,23 +66,23 @@ def test_classify_retryable_unknown_default_not_retryable():
 
 
 def test_make_chunk_id_stable_for_same_input():
-    a = ingest_task._make_chunk_id("doc-A", 5)
-    b = ingest_task._make_chunk_id("doc-A", 5)
+    a = ingest_task._make_chunk_id_int("doc-A", 5)
+    b = ingest_task._make_chunk_id_int("doc-A", 5)
     assert a == b
 
 
 def test_make_chunk_id_different_for_different_inputs():
-    assert ingest_task._make_chunk_id("doc-A", 1) != ingest_task._make_chunk_id(
+    assert ingest_task._make_chunk_id_int("doc-A", 1) != ingest_task._make_chunk_id_int(
         "doc-A", 2
     )
-    assert ingest_task._make_chunk_id("doc-A", 1) != ingest_task._make_chunk_id(
+    assert ingest_task._make_chunk_id_int("doc-A", 1) != ingest_task._make_chunk_id_int(
         "doc-B", 1
     )
 
 
 def test_make_chunk_id_is_positive_int64():
     for i in range(50):
-        cid = ingest_task._make_chunk_id(f"doc-{i}", i)
+        cid = ingest_task._make_chunk_id_int(f"doc-{i}", i)
         assert isinstance(cid, int)
         assert cid > 0
         assert cid < 2**63
@@ -167,13 +168,31 @@ def patched_resources(monkeypatch):
 
 @pytest.fixture
 def patched_pipeline(monkeypatch):
-    """替换七步管道的 IO 函数：parse / embed / NER。
+    """替换十一步管道的 IO 函数：parse_structured / embed / NER。
 
-    切片器走真实 split_text（验真实分隔逻辑）。
+    切片器走真实 split_structured_blocks（验真实分隔逻辑）。
     """
-    # parse_document 返一段长中文文本
-    parse_mock = MagicMock(return_value="第一段。\n\n第二段。\n\n" + "x" * 500)
-    monkeypatch.setattr(ingest_task, "parse_document", parse_mock)
+    # parse_document_structured 返 StructuredBlock 列表
+    blocks = [
+        StructuredBlock(
+            block_id="b0",
+            block_type="paragraph",
+            heading_path=[],
+            content="第一段。",
+            page_number=None,
+            position_index=0,
+        ),
+        StructuredBlock(
+            block_id="b1",
+            block_type="paragraph",
+            heading_path=[],
+            content="第二段。" + "x" * 500,
+            page_number=None,
+            position_index=1,
+        ),
+    ]
+    parse_mock = MagicMock(return_value=blocks)
+    monkeypatch.setattr(ingest_task, "parse_document_structured", parse_mock)
 
     # aembed_texts 按输入长度造对应数量的伪向量
     async def _fake_embed(texts):
@@ -262,7 +281,7 @@ async def test_main_kb_id_mismatch_raises(patched_resources):
 async def test_main_empty_text_raises_parse_error(
     patched_resources, monkeypatch
 ):
-    """parse 返空文本 → ParseError → 不可重试。"""
+    """parse 返空列表 → ParseError → 不可重试。"""
     mock_resources, mock_db, mock_result = patched_resources
 
     file_id = uuid.uuid4()
@@ -271,8 +290,10 @@ async def test_main_empty_text_raises_parse_error(
     kb = _make_kb(kb_id)
     mock_result.scalar_one_or_none.side_effect = [file_record, kb]
 
-    # parse 返全空白
-    monkeypatch.setattr(ingest_task, "parse_document", MagicMock(return_value="   "))
+    # parse 返空列表
+    monkeypatch.setattr(
+        ingest_task, "parse_document_structured", MagicMock(return_value=[])
+    )
 
     with pytest.raises(ParseError, match="为空"):
         await ingest_task._main(str(file_id), str(kb_id))

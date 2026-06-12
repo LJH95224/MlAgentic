@@ -1,6 +1,10 @@
-"""kb_files 表：文件元数据与异步入库状态（V1.5 PRD §5.3）。
+"""kb_files 表：文件元数据与异步入库状态（V1.5 PRD §5.3 + V2.0 扩展）。
 
 文件 `id` 同时作为 `document_id` 写入 Milvus 与 Neo4j，方便跨库追溯。
+
+V2.0 新增字段（T0.2）：
+- doc_metadata: JSONB — 文档级元数据（IDP-05 提取的标题/作者/日期等）
+- summary_brief: Text — 文档摘要（IDP-04 生成的简要摘要）
 """
 
 import uuid
@@ -15,7 +19,7 @@ from sqlalchemy import (
     Text,
     func,
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
@@ -141,6 +145,22 @@ class KbFile(Base):
         nullable=True,
         default=None,
         comment="入库完成时间（status=completed 时写入）",
+    )
+
+    # ── V2.0 新增字段（T0.2） ──
+
+    doc_metadata: Mapped[dict | None] = mapped_column(
+        JSONB,
+        nullable=True,
+        default=None,
+        comment="V2.0 文档级元数据（IDP-05 提取的标题/作者/日期/来源等）",
+    )
+
+    summary_brief: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        default=None,
+        comment="V2.0 文档简要摘要（IDP-04 生成，用于双层索引的文档级检索）",
     )
 
     # 关联反查（KnowledgeBase 那一侧不显式声明 relationship，避免循环 import 风险）
