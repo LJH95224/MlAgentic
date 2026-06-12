@@ -55,7 +55,7 @@
 | T0 | 基础设施扩展（Milvus 升级 / BM25 / trace 表 / eval 表） | P0 前置 | P0 | ✅ 完成 + 单测验收 | 2026-06-12 |
 | T1 | IDP-01/02/06（结构感知解析 + 切片 + 入库管道重构） | P0 | P0 | ✅ 完成 + 单测验收 | 2026-06-12 |
 | T2 | HRE-03/04（BM25 + RRF 融合） | P0 | P0 | ✅ 完成 + 单测验收 | 2026-06-12 |
-| T3 | OBS-01/02（Trace 采集 + 查询接口） | P0 | P0 | ⬜ 待开始 | — |
+| T3 | OBS-01/02（Trace 采集 + 查询接口） | P0 | P0 | ✅ 完成 + 单测验收 | 2026-06-12 |
 | T4 | HRE-05（Reranker 精排） | P1 | P1 | ⬜ 待开始 | — |
 | T5 | CHC-01/02（Citation 注入 + 解析） | P1 | P1 | ⬜ 待开始 | — |
 | T6 | UQA-01（统一查询接口 /v2/query） | P1 | P1 | ⬜ 待开始 | — |
@@ -162,6 +162,33 @@
 - ✅ T2 单测 **17/17 通过**
 - ✅ V1.5 全量回归 **539 passed + 6 skipped**（522 → 539，零回归）
 - ⬜ 集成测试：上传中英混合文档 → 查"bge-reranker-v2"（专有名词）→ BM25 路径召回成功
+
+### T3 · 可观测性 Trace ✅（2026-06-12）
+
+#### 交付内容
+
+| 子任务 | 实现位置 | 备注 |
+|---|---|---|
+| **T3.1 Tracer 采集器** | [app/observability/tracer.py](../app/observability/tracer.py)（`Tracer` 上下文管理器 + `step()` 步骤装饰器 + `_flush_to_db()` 批量写入） | OBS-01 |
+| **T3.1 TraceStep 数据类** | tracer.py `TraceStep`（step_type / parent_step / step_latency_ms / step_input / step_output / model_name / token_count / error_message） | 记录每步骤元数据 |
+| **T3.2 Trace 查询端点** | [app/api/v2/endpoints/traces.py](../app/api/v2/endpoints/traces.py)（`GET /api/v2/traces/{trace_id}` + `GET /api/v2/traces/sessions/{session_id}/traces`） | OBS-02 |
+| **T3.2 V2 Schemas** | [app/schemas/v2/trace.py](../app/schemas/v2/trace.py)（TraceDetail / TraceStepItem / TraceListItem / TraceListResponse） | — |
+| **T3.2 V2 Router** | [app/api/v2/router.py](../app/api/v2/router.py)（`/api/v2` 前缀 + 挂载到 main.py） | 与 V1 `/api/v1` 独立并存 |
+| **T3.3 单测** | [tests/test_v2_t3.py](../tests/test_v2_t3.py)（18 用例） | Tracer 生命周期 / step 计时 / 禁用短路 / Schema / 端点注册 / router 挂载 |
+
+#### 关键设计决策
+
+1. **trace_enable=False 短路**：禁用时 Tracer.step() 不记录任何数据，零开销
+2. **同步写入 PG**：V2 阶段简化为同步写入（短连接）；T12 阶段优化为异步
+3. **trace 写入失败不影响业务**：`_flush_to_db()` 包裹 try/except，失败仅 warning
+4. **V2 API 在 `/api/v2/` 独立前缀**：与 V1.5 `/api/v1/` 完全隔离，互不影响
+5. **session trace 分页查询**：先查根步骤再 count 每条步骤数，避免大 join
+
+#### 验证状态
+
+- ✅ T3 单测 **18/18 通过**
+- ✅ V1.5 全量回归 **557 passed + 6 skipped**（539 → 557，零回归）
+- ⬜ 集成测试：调一次 /v2/query → 查 trace_id → 验步骤完整
 
 ---
 
@@ -567,6 +594,12 @@ python scripts/kg_smoke.py
 
 ## 历史变更
 
+- **2026-06-12**：V2.0 Hermes T0+T1+T2+T3 全部完成（P0 进度 4/4，单测 557 通过）
+  - T0：基础设施扩展（8 配置项 + 2 新 PG 表 + Milvus V2 Schema 15 字段 + BM25 索引）
+  - T1：智能文档处理（StructuredBlock + StructuredChunk + 11 步入库管道）
+  - T2：混合检索引擎（Milvus BM25 Function + hybrid_search + RRFRanker + 降级策略）
+  - T3：可观测性 Trace（Tracer 上下文管理器 + /api/v2/traces 查询接口）
+  - 全量回归 557 passed + 6 skipped，零回归
 - **2026-06-12**：V2.0 Hermes 迭代启动，T0 基础设施扩展进行中
 - **2026-06-12**：V1.5 全链路 smoke 端到端验收通过 ✅✅✅
   - 6 个阶段 6/6 完成；mock 420 用例全过，集成测试 37/37 全过，**端到端真实跑通**

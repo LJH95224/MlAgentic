@@ -25,6 +25,7 @@ from app.core.config import get_settings
 from app.rag.embedding import aembed_texts
 from app.rag.milvus_client import get_milvus_client
 from app.rag.naming import build_kb_collection_name
+from app.rag.reranker import RerankResult, get_reranker
 from app.rag.retriever import _build_filter_expr, _format_hits, get_current_role
 
 logger = logging.getLogger(__name__)
@@ -185,16 +186,47 @@ async def hybrid_search(
 
     # 合并重排（按 score 降序）
     all_results.sort(key=lambda r: r.score, reverse=True)
-    merged = all_results[:top_k]
+    merged = all_results[:top_k * 2]  # 取 2×top_k 候选，留给 Reranker 精排
 
     logger.info(
-        "hybrid_search: 跨 %d collection 合并后命中 %d 条（top_k=%d）",
+        "hybrid_search: 跨 %d collection 合并后命中 %d 条（候选集）",
         len(target_collections),
         len(merged),
+    )
+
+    # ── Reranker 精排（HRE-05） ──
+    reranker = get_reranker()
+    reranker_chunks = [
+        {
+            "content": r.content,
+            "document_id": r.document_id,
+            "entity_tags": r.entity_tags,
+            "heading_path": r.heading_path,
+            "block_type": r.block_type,
+            "page_number": r.page_number,
+            "metadata": r.metadata,
+        }
+        for r in merged
+    ]
+    reranked = await reranker.rerank(query, reranker_chunks, top_k=top_k)
+
+    # 将 RerankResult 映射回 HybridSearchResult
+    final_results: list[HybridSearchResult] = []
+    for rr in reranked:
+        original = merged[rr.index] if rr.index < len(merged) else None
+        if original is None:
+            continue
+        # 用 Reranker 分数覆盖原 score
+        original.score = rr.relevance_score
+        final_results.append(original)
+
+    logger.info(
+        "hybrid_search: Reranker 精排后返回 %d 条（top_k=%d）",
+        len(final_results),
         top_k,
     )
 
-    return merged
+    return final_results
 
 
 def _search_single_collection(

@@ -19,6 +19,7 @@ from fastapi import FastAPI
 
 from app.api.exceptions import register_exception_handlers
 from app.api.v1.router import router as v1_router
+from app.api.v2.router import router as v2_router
 from app.core.config import get_settings
 from app.core.logging import setup_logging
 from app.db.session import engine
@@ -29,6 +30,8 @@ from app.rag import close_milvus, init_milvus
 # 必须导入模型才能让 Base.metadata 感知到它们
 # V1.5：新增 KnowledgeBase / KbFile 两张表（PRD §5.2、§5.3）
 from app.models import ChatMessage, ChatSession, KbFile, KnowledgeBase  # noqa: F401
+# V2.0 新模型：AgentTrace / EvalTask（lifespan create_all 时自动建表）
+from app.models import AgentTrace, EvalTask  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
@@ -118,6 +121,7 @@ def create_app() -> FastAPI:
 
     # 路由挂载
     app.include_router(v1_router)
+    app.include_router(v2_router)
 
     # 健康检查
     @app.get("/health", tags=["健康检查"])
