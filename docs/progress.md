@@ -56,9 +56,9 @@
 | T1 | IDP-01/02/06（结构感知解析 + 切片 + 入库管道重构） | P0 | P0 | ✅ 完成 + 单测验收 | 2026-06-12 |
 | T2 | HRE-03/04（BM25 + RRF 融合） | P0 | P0 | ✅ 完成 + 单测验收 | 2026-06-12 |
 | T3 | OBS-01/02（Trace 采集 + 查询接口） | P0 | P0 | ✅ 完成 + 单测验收 | 2026-06-12 |
-| T4 | HRE-05（Reranker 精排） | P1 | P1 | ⬜ 待开始 | — |
-| T5 | CHC-01/02（Citation 注入 + 解析） | P1 | P1 | ⬜ 待开始 | — |
-| T6 | UQA-01（统一查询接口 /v2/query） | P1 | P1 | ⬜ 待开始 | — |
+| T4 | HRE-05（Reranker 精排） | P1 | P1 | ✅ 完成 + 单测验收 | 2026-06-15 |
+| T5 | CHC-01/02（Citation 注入 + 解析） | P1 | P1 | ✅ 完成 + 单测验收 | 2026-06-15 |
+| T6 | UQA-01（统一查询接口 /v2/query） | P1 | P1 | ✅ 完成 + 单测验收 | 2026-06-15 |
 | T7 | IDP-03/04/05（表格描述 + 双层索引 + 文档元数据） | P2 | P2 | ⬜ 待开始 | — |
 | T8 | HRE-01/02/06（Query 改写 + NER + 配置项） | P2 | P2 | ⬜ 待开始 | — |
 | T9 | CHC-03/04（置信度 + 答案自检） | P2 | P2 | ⬜ 待开始 | — |
@@ -189,6 +189,90 @@
 - ✅ T3 单测 **18/18 通过**
 - ✅ V1.5 全量回归 **557 passed + 6 skipped**（539 → 557，零回归）
 - ⬜ 集成测试：调一次 /v2/query → 查 trace_id → 验步骤完整
+
+### T4 · Reranker 精排 ✅（2026-06-15）
+
+#### 交付内容
+
+| 子任务 | 实现位置 | 备注 |
+|---|---|---|
+| **T4.1 BaseReranker 抽象** | [app/rag/reranker.py](../app/rag/reranker.py)（`BaseReranker` ABC + `RerankResult` 数据类） | 统一精排接口 |
+| **T4.1 NoopReranker** | reranker.py（`NoopReranker.rerank` → 原顺序 + score=1.0） | reranker_type=none 时启用，零开销 |
+| **T4.1 LiteLLMReranker** | reranker.py（`LiteLLMReranker._do_rerank` + Semaphore(5) 并发限制 + 降级 `_fallback`） | 走 `litellm.arerank` API，支持 SiliconFlow/Cohere/Jina 格式 |
+| **T4.1 兜底规则** | reranker.py（过滤后 < 3 时补到 3 条，score=0 标记） | PRD 兜底，避免高阈值场景空召回 |
+| **T4.2 集成到 hybrid_retriever** | [app/rag/hybrid_retriever.py](../app/rag/hybrid_retriever.py)（取候选 `2*top_k` → reranker.rerank → score 覆盖） | 失败降级返回原序 |
+| **T4.3 工厂函数** | reranker.py（`get_reranker()` 按 `reranker_type` 切换 Noop/LiteLLM） | 无 LiteLLM 配置时默认 Noop |
+
+#### 关键设计决策
+
+1. **`import litellm` 提到模块顶层**：原本写在方法内 import，导致单测 `patch("app.rag.reranker.litellm")` 找不到模块属性 → 移到顶层后 patch 生效
+2. **NoopReranker 给 score=1.0 而非透传**：表达"不做精排，给满分表示信任原排序"语义；统一 RerankResult 数据格式，下游无需分支处理
+3. **降级返回 score=0 标记**：API 失败 / 兜底补充时分数标 0，便于上层日志区分"真实精排结果"和"降级 fallback"
+4. **Semaphore(5) 限并发**：避免 Reranker API 限流，特别是 SiliconFlow 免费档限流较紧
+5. **过滤分数低于 similarity_threshold**：默认 0.3，防止"语义无关但向量相似"的 chunk 进入 LLM 上下文
+
+#### 验证状态
+
+- ✅ T4 单测 **10/10 通过**（覆盖 NoopReranker/LiteLLMReranker/工厂函数/降级/兜底）
+- ✅ 端到端贯通验证：`hybrid_search → NoopReranker → 返回 1.0 分数`
+- ⬜ 集成测试：实接 SiliconFlow API 跑一遍真实 reranker 调用
+
+### T5 · Citation 注入 + 解析 ✅（2026-06-15）
+
+#### 交付内容
+
+| 子任务 | 实现位置 | 备注 |
+|---|---|---|
+| **T5.1 CHC-01 context 组装** | [app/rag/citation.py](../app/rag/citation.py)（`build_context_with_citation`） | 输出 `[1] 来源：xxx.pdf（第3页）\n内容：...` 格式 |
+| **T5.1 system prompt 注入** | citation.py（`build_citation_system_prompt`） | 引导 LLM 用 `[N]` 标注来源 |
+| **T5.2 CHC-02 解析** | citation.py（`parse_citations`） | 正则 `\[(\d+)\]` 抽取 + 去重 + 映射回 chunks |
+| **T5.2 CitationItem 输出** | parse_citations 返回（chunk_id / document_name / page_number / heading_path / snippet / rerank_score） | snippet 取前 200 字符摘要 |
+
+#### 关键设计决策
+
+1. **Unicode 中文引号 `"` `"` 替代 ASCII `"`**：原本 system prompt 内 `"台风是热带气旋[1]"` 用 ASCII 双引号导致 Python 字符串提前闭合 → SyntaxError；统一用 U+201C / U+201D
+2. **去重保编号顺序**：`parse_citations` 用 `seen` 集合 + 顺序列表，保证 `[1] [2] [1]` 输入只产出 1 个 [1] 引用项，但保留首次出现顺序
+3. **越界编号忽略**：解析到 `[5]` 但 chunks 只有 3 条时，静默丢弃越界编号（LLM 偶尔会编造编号）
+4. **未引用 chunk 不输出**：仅 LLM 实际引用的 chunks 出现在 source_citations 中，避免噪音
+5. **docstring 转义 `\\d` 而非 `\d`**：避免 Python `DeprecationWarning: invalid escape sequence`
+
+#### 验证状态
+
+- ✅ T5 单测 **4/4 通过**（context 组装 / 引用解析 / 无引用 / 去重）
+- ✅ 端到端贯通验证：LLM 答案 `[1]...[2]...[1]` → source_citations 准确映射回 chunk_id
+
+### T6 · 统一查询接口 /v2/query ✅（2026-06-15）
+
+#### 交付内容
+
+| 子任务 | 实现位置 | 备注 |
+|---|---|---|
+| **T6.1 endpoint 骨架** | [app/api/v2/endpoints/query.py](../app/api/v2/endpoints/query.py)（`POST /api/v2/query`） | 串联 hybrid_search → build_context → LLM → parse_citations |
+| **T6.1 Trace 埋点** | query.py（`Tracer` 包裹 + 4 个 step：retrieve/build_context/generate/citation_parse） | 每步骤自动写 agent_traces 表 |
+| **T6.1 LLM 调用** | query.py（`_generate_answer` 调 `litellm.acompletion`） | temperature=0.3, max_tokens=2000 |
+| **T6.1 兜底文案** | query.py（检索为空 / LLM 失败时返回友好文案 + trace_id） | 不抛异常，保证 API 稳定 |
+| **T6.2 V2 schemas** | [app/schemas/v2/query.py](../app/schemas/v2/query.py)（`QueryRequest` / `QueryOptions` / `QueryResponse` / `CitationItem`） | top_k 嵌套在 options 内 |
+| **T6.3 V2 router 挂载** | [app/api/v2/router.py](../app/api/v2/router.py) 追加 `query.router` | `/api/v2` 前缀，与 traces 端点并存 |
+
+#### 关键设计决策
+
+1. **top_k 放在 QueryOptions 嵌套字段而非顶层**：`QueryRequest.options.top_k` 而非 `QueryRequest.top_k`，将检索控制参数收口到 `options`，便于未来扩展 stream / reranker_enable / bm25_enable 等
+2. **删除无用导入 `from app.services.chat_service import ChatService`**：T6 用的是 stream_chat 函数式 API，不存在 ChatService 类；遗漏的导入导致 `/v2/query` 路由注册失败
+3. **Trace 包裹整个推理流程**：每步用 `tracer.step()` 上下文管理器自动计时，失败步骤的 step_output 也会被记录，便于排查
+4. **检索空时不调 LLM**：直接返回兜底文案，节省 token；trace_id 仍透传便于追溯
+5. **总耗时取整 ms**：`int((time.perf_counter() - start) * 1000)`，避免浮点小数干扰前端展示
+
+#### 验证状态
+
+- ✅ T6 单测 **6/6 通过**（4 个 schema 校验 + 2 个端点注册校验）
+- ✅ 端到端贯通测试 **3/3 通过**（完整链路 + 检索空兜底 + LLM 失败兜底，新增于 [tests/test_v2_p1.py::TestV2QueryE2E](../tests/test_v2_p1.py)）
+- ⬜ 集成测试：起 uvicorn → 真发 POST /api/v2/query → 验答案带 [1][2] + source_citations + trace_id 落 PG
+
+### P1 阶段验收
+
+- ✅ P1 单测 **23/23 通过**（T4 10 + T5 4 + T6 6 + 端到端贯通 3，单文件 [tests/test_v2_p1.py](../tests/test_v2_p1.py)）
+- ✅ V1.5 全量回归 **580 passed + 6 skipped**（557 → 580，零回归）
+- ✅ 修复 T4 集成时引入的 T2 老测试失败（`test_hybrid_search_bm25_enabled` 期望原始 score 0.95，实际 NoopReranker 覆盖为 1.0；调整断言+注释说明）
 
 ---
 
@@ -594,6 +678,18 @@ python scripts/kg_smoke.py
 
 ## 历史变更
 
+- **2026-06-15**：V2.0 Hermes T4+T5+T6 全部完成（P1 进度 3/3，单测 580 通过）
+  - T4：HRE-05 Reranker 精排（BaseReranker / NoopReranker / LiteLLMReranker + Semaphore 限流 + 兜底规则 + 降级返原序）
+  - T5：CHC-01/02 Citation（build_context_with_citation `[1] 来源:...` 格式 + parse_citations 正则解析去重）
+  - T6：UQA-01 统一查询接口 `/api/v2/query`（hybrid_search → Tracer → build_context → litellm.acompletion → parse_citations 全链路；4 步埋点）
+  - 修复阶段（共 4 类问题）：
+    1. **`import litellm` 提到顶层**：[app/rag/reranker.py](../app/rag/reranker.py) 原写在方法内 import，导致单测 patch 失败 → 移到模块顶层
+    2. **citation.py 中文引号 SyntaxError**：system prompt 内 ASCII `"` 被 Python 当作字符串闭合符 → 改用 Unicode 中文引号 U+201C/U+201D
+    3. **citation.py docstring `\d` DeprecationWarning**：模块/函数 docstring 中 `\d` 是无效转义 → 改为 `\\d`
+    4. **query.py 误导入不存在的 `ChatService`**：T6 实际用 stream_chat 函数式 API → 删除该导入
+  - T2 老测试 `test_hybrid_search_bm25_enabled` 同步修复：T4 集成后 NoopReranker 把 score 覆盖为 1.0（"信任原排序、满分"语义），断言从 0.95 改为 1.0 + 注释说明
+  - 端到端贯通测试新增 3 用例：完整链路（hybrid_search → rerank → context → LLM → citation 串通）+ 检索空兜底 + LLM 失败兜底
+  - 全量回归 **580 passed + 6 skipped**（557 → 580，零回归）
 - **2026-06-12**：V2.0 Hermes T0+T1+T2+T3 全部完成（P0 进度 4/4，单测 557 通过）
   - T0：基础设施扩展（8 配置项 + 2 新 PG 表 + Milvus V2 Schema 15 字段 + BM25 索引）
   - T1：智能文档处理（StructuredBlock + StructuredChunk + 11 步入库管道）

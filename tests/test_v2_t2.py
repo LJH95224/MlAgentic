@@ -170,7 +170,9 @@ class TestHybridSearch:
 
             assert len(results) == 1
             assert results[0].content == "台风"
-            assert results[0].score == 0.95
+            # 注：T4 后默认 NoopReranker 会把 score 覆盖为 1.0（"信任原排序、满分"语义）
+            # 检索原始 distance=0.95 由 hybrid_search 调用透传到 reranker 之前
+            assert results[0].score == 1.0
             assert mock_client.hybrid_search.called
 
     @pytest.mark.asyncio
