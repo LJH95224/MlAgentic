@@ -7,6 +7,7 @@ V2.0：新增 AgentTrace + EvalTask + KB/KbFile 扩展字段
 
 from app.models.agent_trace import AgentTrace
 from app.models.eval_task import EvalTask
+from app.models.query_analytics import QueryAnalytics
 from app.models.kb_file import KbFile
 from app.models.knowledge_base import KnowledgeBase
 from app.models.message import ChatMessage
@@ -19,4 +20,5 @@ __all__ = [
     "KbFile",
     "AgentTrace",
     "EvalTask",
+    "QueryAnalytics",
 ]
