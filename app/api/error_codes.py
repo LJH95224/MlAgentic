@@ -37,6 +37,7 @@ UNSUPPORTED_MEDIA = 41500  # 文件格式不支持或编码无法识别（PRD FI
 
 # 422 — 语义错误
 EMBEDDING_DIM_MISMATCH = 42200  # 向量维度与知识库 embedding_dim 不一致（PRD §6.2）
+CONTEXT_CHUNKS_EMPTY = 42201  # context_chunks 为空（/v2/generate 接口，PRD §1129）
 
 # ───────── 服务端错误 (50xxx → HTTP 5xx) ─────────
 INTERNAL_ERROR = 50000  # 未分类服务端异常（Milvus / Neo4j 连接异常等）
@@ -56,6 +57,7 @@ DEFAULT_MESSAGES: dict[int, str] = {
     FILE_TOO_LARGE: "文件大小超出限制",
     UNSUPPORTED_MEDIA: "文件格式不支持或编码无法识别",
     EMBEDDING_DIM_MISMATCH: "向量维度与知识库配置不匹配",
+    CONTEXT_CHUNKS_EMPTY: "传入的上下文块列表为空",
     INTERNAL_ERROR: "服务器内部错误",
     CELERY_UNAVAILABLE: "异步任务队列不可达",
 }
@@ -73,6 +75,7 @@ __all__ = [
     "FILE_TOO_LARGE",
     "UNSUPPORTED_MEDIA",
     "EMBEDDING_DIM_MISMATCH",
+    "CONTEXT_CHUNKS_EMPTY",
     "INTERNAL_ERROR",
     "CELERY_UNAVAILABLE",
     "DEFAULT_MESSAGES",
