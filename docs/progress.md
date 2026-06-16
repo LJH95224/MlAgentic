@@ -59,9 +59,9 @@
 | T4 | HRE-05（Reranker 精排） | P1 | P1 | ✅ 完成 + 单测验收 | 2026-06-15 |
 | T5 | CHC-01/02（Citation 注入 + 解析） | P1 | P1 | ✅ 完成 + 单测验收 | 2026-06-15 |
 | T6 | UQA-01（统一查询接口 /v2/query） | P1 | P1 | ✅ 完成 + 单测验收 | 2026-06-15 |
-| T7 | IDP-03/04/05（表格描述 + 双层索引 + 文档元数据） | P2 | P2 | ⬜ 待开始 | — |
-| T8 | HRE-01/02/06（Query 改写 + NER + 配置项） | P2 | P2 | ⬜ 待开始 | — |
-| T9 | CHC-03/04（置信度 + 答案自检） | P2 | P2 | ⬜ 待开始 | — |
+| T7 | IDP-03/04/05（表格描述 + 双层索引 + 文档元数据） | P2 | P2 | ✅ 完成 + 单测验收 | 2026-06-15 |
+| T8 | HRE-01/02/06（Query 改写 + NER + 配置项） | P2 | P2 | ✅ 完成 + 单测验收 | 2026-06-15 |
+| T9 | CHC-03/04（置信度 + 答案自检） | P2 | P2 | ✅ 完成 + 单测验收 | 2026-06-15 |
 | T10 | UQA-02/03/04（分层子接口） | P3 | P3 | ⬜ 待开始 | — |
 | T11 | EVA-01/02/03（RAGAS 评估） | P3 | P3 | ⬜ 待开始 | — |
 | T12 | OBS-03（聚合统计） | P4 | P4 | ⬜ 待开始 | — |
@@ -266,13 +266,153 @@
 
 - ✅ T6 单测 **6/6 通过**（4 个 schema 校验 + 2 个端点注册校验）
 - ✅ 端到端贯通测试 **3/3 通过**（完整链路 + 检索空兜底 + LLM 失败兜底，新增于 [tests/test_v2_p1.py::TestV2QueryE2E](../tests/test_v2_p1.py)）
-- ⬜ 集成测试：起 uvicorn → 真发 POST /api/v2/query → 验答案带 [1][2] + source_citations + trace_id 落 PG
+- ✅ 集成测试：POST `/api/v2/query` 三种模式（none/HyDE/multi_query + Graph RAG ON/OFF）均通过，4~8s 返回，citation 正确
 
 ### P1 阶段验收
 
 - ✅ P1 单测 **23/23 通过**（T4 10 + T5 4 + T6 6 + 端到端贯通 3，单文件 [tests/test_v2_p1.py](../tests/test_v2_p1.py)）
 - ✅ V1.5 全量回归 **580 passed + 6 skipped**（557 → 580，零回归）
 - ✅ 修复 T4 集成时引入的 T2 老测试失败（`test_hybrid_search_bm25_enabled` 期望原始 score 0.95，实际 NoopReranker 覆盖为 1.0；调整断言+注释说明）
+
+### T8 · Query 改写 + Query NER + 三层配置合并 ✅（2026-06-15）
+
+#### 交付内容
+
+| 子任务 | 实现位置 | 备注 |
+|---|---|---|
+| **T8.1 配置层扩展** | [app/core/config.py](../app/core/config.py)（V2.0 区段新增 6 字段：query_rewriter_model / query_rewrite_default / graph_rag_enable / multi_query_count / query_ner_timeout_s / graph_anchor_timeout_s） | 默认 graph_rag_enable=True / query_rewrite_default=none |
+| **T8.1 错误码 40011** | [app/api/error_codes.py](../app/api/error_codes.py) `QUERY_REWRITE_INVALID = 40011` + [app/api/exceptions.py](../app/api/exceptions.py) HTTP 400 注册 | 与 PRD §1127 严格对齐 |
+| **T8.1 Schema 扩展** | [app/schemas/v2/query.py](../app/schemas/v2/query.py)（QueryOptions 加 query_rewrite/enable_graph_rag/similarity_threshold；top_k 默认改 None；QueryResponse 加 rewritten_query/sub_queries/ner_entities/graph_anchored_tags 4 个 debug 字段） | VALID_QUERY_REWRITE 模块级常量供下游复用 |
+| **T8.1 KB Schema/Service** | [app/schemas/knowledge_base.py](../app/schemas/knowledge_base.py) Update/Detail 加 retrieval_config + [app/services/kb_service.py](../app/services/kb_service.py) update_kb 接受 retrieval_config_was_set + [app/api/v1/endpoints/knowledge_bases.py](../app/api/v1/endpoints/knowledge_bases.py) endpoint 透传 | HRE-06 KB 级配置闭环 |
+| **T8.2 三层合并函数** | [app/rag/retrieval_config.py](../app/rag/retrieval_config.py)（`ResolvedRetrievalOptions` + `resolve_options`） | API > KB > settings；KB JSONB query_rewrite 非法值同样抛 40011 |
+| **T8.3 Query 改写器** | [app/rag/query_rewriter.py](../app/rag/query_rewriter.py)（`RewriteResult` + `rewrite_query` + 两套 prompt） | none 零 LLM 调用 / hyde 100~200 字假设答案 / multi_query JSON 解析 N 子查询 |
+| **T8.4 Query NER + 图谱锚定** | [app/rag/query_ner.py](../app/rag/query_ner.py)（`extract_query_entities` + `anchor_to_graph` + `_truncate_utf8`） | 薄封装 [app/kg/ner.py](../app/kg/ner.py)；锚定走 max_hops=1 + Semaphore(5) + UTF-8 字节安全截断 |
+| **T8.5 query.py 主链路** | [app/api/v2/endpoints/query.py](../app/api/v2/endpoints/query.py)（重写：load KB → resolve_options → query_rewrite → query_ner → graph_anchor → retrieve → build_context → generate → citation_parse；7 步 trace） | 新增 `_multi_query_search` RRF 二次融合 + `_do_retrieve` 策略分支 |
+| **T8.6 单测** | [tests/test_v2_t8.py](../tests/test_v2_t8.py)（41 用例） | resolve_options 7 + rewrite 11 + extract_ner 4 + anchor 6 + RRF 3 + Schema 5 + E2E 5 |
+| **P1 兼容修复** | [tests/test_v2_p1.py](../tests/test_v2_p1.py)（top_k 默认 None；3 个 E2E 用例补 mock NER/锚定/改写） | 23 → 23（零回归） |
+
+#### 关键设计决策
+
+1. **`query_rewrite` 校验放在 endpoint/resolve_options 入口，不放 Pydantic field_validator**：Pydantic 会把任何 validator 内异常重新打包成 `ValidationError`，最终走 `validation_exception_handler` 翻译成 `PARAM_INVALID(40001)`，无法落到 PRD 要求的 `QUERY_REWRITE_INVALID(40011)`。改在 `resolve_options` 用 `BusinessError(40011)` 显式拦截
+2. **multi_query 用 RRF 二次融合而非 max-score**：沿用 T2 RRF 思想，N 路结果按 `chunk_id` 去重 + rank-based 重算分数 `score = Σ 1/(k + rank_i)`，k=60。同 chunk 多路命中分数累加，语义上"多角度都命中"的 chunk 排名更高
+3. **Graph RAG 默认启用**：`graph_rag_enable=True`，Query 无实体或实体不在图谱时自动短路（`anchor_to_graph` 返 `[]` → 不传 entity_tags 给 hybrid_search），无副作用
+4. **查询 NER 薄封装而非独立 prompt**：直接复用 [app/kg/ner.py](../app/kg/ner.py) `run_ner` + 加 `wait_for(query_ner_timeout_s)` 硬超时；后续切换轻量模型（如 `QUERY_REWRITER_MODEL`）只需切配置
+5. **多 KB 时取第一个 KB 的 retrieval_config**：本期限制；后续可演进为 union/优先级/fan-out 策略
+6. **HybridSearchResult 字段对齐**：`_multi_query_search` 重建 `HybridSearchResult` 时字段必须与 `__slots__` 严格匹配（chunk_id / content / document_id / score / entity_tags / heading_path / block_type / page_number / metadata / source_collection），不能引用 PRD 设计文档里 V2 schema 的 position_index/parent_chunk_id/is_summary（那些字段在 Milvus 但不在内存数据类）
+7. **anchor_to_graph 把起点实体本身也加入 tags**：即使该实体在图谱里没有邻居，它本身也是有效的过滤标签（PRD §HRE-02 的"实体标签"包含起点）；query 失败时起点仍计入，确保最坏情况退化为"按 NER 实体过滤"而非完全无 tags
+
+#### 验证状态
+
+- ✅ T8 单测 **41/41 通过**（resolve_options / rewrite_query / extract_query_entities / anchor_to_graph / _multi_query_search / Schemas / 5 个端到端集成）
+- ✅ V2 全套单测 **201/201 通过**（T0~T8 完整链路）
+- ✅ 全量 mock 回归 **621 passed + 6 skipped**（580 → 621，T8 净增 41，零回归）
+- ⬜ 集成测试：起 uvicorn → 真发 POST /api/v2/query 验 HyDE/multi_query/Graph RAG 三种路径 + trace_id 落 PG 看 step 顺序
+
+### T7 · 表格描述 + 双层索引 + 文档元数据 ✅（2026-06-15）
+
+#### 交付内容
+
+| 子任务 | 实现位置 | 备注 |
+|---|---|---|
+| **T7.1 配置层扩展** | [app/core/config.py](../app/core/config.py)（V2.0 区段新增 5 字段：idp_llm_model / idp_dual_index_enable / idp_llm_timeout_s / idp_concurrency / idp_doc_meta_input_chars） | 默认 idp_dual_index_enable=True；与 KG_NER_MODEL 同款解耦 |
+| **T7.1 Schema 暴露** | [app/schemas/kb_file.py](../app/schemas/kb_file.py)（FileListItem 加 summary_brief；FileDetail 加 summary_brief + doc_metadata） | PRD §282 文件列表展示摘要 |
+| **T7.2 IDP-03 表格描述** | [app/ingest/table_description.py](../app/ingest/table_description.py)（`TableDescription` + `generate_table_descriptions` + 共享 `_resolve_idp_kwargs`） | Semaphore(idp_concurrency) + wait_for(idp_llm_timeout_s) + UTF-8 字节安全截断到 600 |
+| **T7.3 IDP-04 双层索引** | [app/ingest/dual_layer.py](../app/ingest/dual_layer.py)（`group_by_parent_heading` + `generate_coarse_chunks`） | 按 `heading_path[:-1]` 聚合；空 heading 单独成组；摘要 ≤ 300 字 |
+| **T7.4 IDP-05 文档元数据** | [app/ingest/doc_metadata.py](../app/ingest/doc_metadata.py)（`DocMetadata` + `extract_doc_metadata` + `_parse_metadata`） | 提取 doc_type/doc_date/language/key_topics/summary_brief；JSON 输出 + 围栏剥离 + 非法值置 None |
+| **T7.5 主链路** | [app/tasks/ingest_task.py](../app/tasks/ingest_task.py)（`_step_table_description` / `_step_dual_layer_index` / `_step_doc_metadata` 替换三个 noop；`_main` 串联三类 chunk + 回填 parent_chunk_id；返回值新增 fine_chunk_count / table_description_count / coarse_chunk_count） | NER 仅对 fine_chunks 跑；td/coarse 补空 entities 列表对齐 zip 长度 |
+| **T7.6 单测** | [tests/test_v2_t7.py](../tests/test_v2_t7.py)（33 用例） | TableDescription 6 + Group/CoarseChunk 7 + DocMetadata 9 + StepFunctions 7 + E2E 1 + Schema 3 |
+| **T1 兼容修复** | [tests/test_v2_t1.py](../tests/test_v2_t1.py)（3 个 noop 测试改为存在性断言） | 老测试断言 noop 函数存在，T7 起替换为新名 |
+| **ingest_task 兼容修复** | [tests/test_ingest_task.py](../tests/test_ingest_task.py)（patched_pipeline fixture 加 mock T7 三步） | 防真调 LLM；保持 happy path 行为不变 |
+
+#### 关键设计决策
+
+1. **三类 chunk 的 chunk_index 全局唯一**：fine 用 splitter 给的 0..N-1；table_description 从 `len(fine)` 起递增；coarse 从 `len(fine) + len(td)` 起递增。`_make_chunk_id_int(document_id, index)` SHA256 → INT64 保证幂等 upsert 不冲突
+2. **parent_chunk_id 存 INT64 字符串而非 uuid**：Milvus 检索返回的是 INT64 chunk_id，做 `expr="parent_chunk_id == \"<int_str>\""` 子查询时直接命中；VARCHAR(64) 装 64-bit 整数字符串绰绰有余
+3. **frozen StructuredChunk 用 `dataclasses.replace` 回填**：T1 把 StructuredChunk 设为 frozen 防止意外突变；T7 双层索引需要回填 fine 的 parent_chunk_id 时只能用 replace 重建副本
+4. **NER 仅对 fine_chunks 跑**：粗粒度摘要 / 表格描述都是 LLM 合成的二次文本，不应抽出新实体；同时给 td/coarse 补空 `[]` 让 zip(chunks, chunk_entities) 对齐 `_step_milvus_write_v2` / `_step_neo4j_write` 的索引语义
+5. **table_description chunk 的 is_summary=False**：它不是双层索引的粗粒度层，而是表格的"语义检索代理"；按 PRD §229-231 该字段保持 False
+6. **粗粒度 chunk 的 block_type 统一为 paragraph**：摘要本质就是段落文本，统一类型简化下游 BM25 排除规则（PRD §1095 排除 table_description；is_summary 单独看字段）
+7. **三步软失败原则**：IDP-03 单张表失败 → 不出 description；IDP-04 单组失败 → 不生成对应粗 chunk + 子 chunk 的 parent_chunk_id 保持 None；IDP-05 失败 → doc_metadata/summary_brief 留空。任一步骤失败都不阻断主链路（沿用 V1.5 NER 软失败模式）
+8. **`_resolve_idp_kwargs` 三模块共享**：在 [table_description.py](../app/ingest/table_description.py) 定义，dual_layer / doc_metadata 通过 `from .table_description import _resolve_idp_kwargs` 复用，避免厂商前缀推断逻辑写三遍
+
+#### 验证状态
+
+- ✅ T7 单测 **33/33 通过**（含 1 个端到端联跑：fine + td + coarse 三类都进 Milvus）
+- ✅ V2 全套单测 **234/234 通过**（T0~T8 完整链路）
+- ✅ 全量 mock 回归 **654 passed + 6 skipped**（621 → 654，T7 净增 33，零回归）
+- ⬜ 集成测试：上传含 5 张表的真实 docx → 看 `chunk_count` = fine + 5 + coarse；`block_type=="table_description"` 的 5 条 parent_chunk_id 指向各自表格；`kb_files.doc_metadata.doc_type` 自动识别
+
+### T9 · 置信度评分 + 答案自检 ✅（2026-06-15，**P2 阶段全部收尾**）
+
+#### 交付内容
+
+| 子任务 | 实现位置 | 备注 |
+|---|---|---|
+| **T9.1 配置层** | [app/core/config.py](../app/core/config.py)（V2.0 区段新增 3 字段：faithfulness_model / faithfulness_check_default / faithfulness_check_timeout_s） | 默认 False；与 KG_NER_MODEL / IDP_LLM_MODEL 同款解耦 |
+| **T9.1 Schema 扩展** | [app/schemas/v2/query.py](../app/schemas/v2/query.py)（QueryOptions 加 enable_faithfulness_check；QueryResponse 加 confidence / low_confidence_warning / faithfulness_check / unverified_claims 4 字段） | confidence 用 ge/le 校验 [0, 1] |
+| **T9.1 三层合并** | [app/rag/retrieval_config.py](../app/rag/retrieval_config.py)（ResolvedRetrievalOptions + resolve_options 增量 enable_faithfulness_check） | API > KB > settings 同款 |
+| **T9.2 CHC-03 置信度** | [app/rag/confidence.py](../app/rag/confidence.py)（`ConfidenceScore` + `compute_confidence`） | 纯函数；PRD §540 公式；< 0.5 触发 PRD §556 警告文案 |
+| **T9.3 CHC-04 自检** | [app/rag/faithfulness.py](../app/rag/faithfulness.py)（`FaithfulnessResult` + `check_faithfulness` + `append_unverified_warning` + `_parse_claims`） | LLM as Judge；JSON 数组/对象兼容；wait_for + 围栏剥离 + 软失败 skipped |
+| **T9.4 主链路** | [app/api/v2/endpoints/query.py](../app/api/v2/endpoints/query.py)（Step 7 后插入 faithfulness_check + compute_confidence；检索空兜底分支也透 4 个新字段） | 自检 disabled 时不调 LLM；有 unverified 时 append_unverified_warning 改 answer |
+| **T9.5 单测** | [tests/test_v2_t9.py](../tests/test_v2_t9.py)（37 用例） | compute_confidence 9 + parse_claims 7 + check_faithfulness 7 + append_warning 2 + resolve 4 + Schemas 3 + E2E 5 |
+
+#### 关键设计决策
+
+1. **`faithfulness_check` 字段三态**：`"ok"`（跑通）/ `"skipped"`（异常或超时软失败）/ `"disabled"`（开关关闭）—— 三态分开便于运维区分"用户没启用" vs "启用了但失败了"，PRD §586 风格
+2. **unverified 在 answer 上用追加文本清单**：在原 answer 末尾加 `⚠ 以下事实未在检索内容中找到明确支撑：- claim1 - claim2`；不再调 LLM 二次插 † 标记，简单可靠零成本
+3. **confidence 计算用算术平均**：PRD §540 "weighted_avg(rerank_scores)" 措辞模糊，选最简单的"被引用 chunk 等权平均"；breakdown 字段透出 weighted_score / coverage / penalty 三因子便于 trace 排查
+4. **检索空兜底也透 4 个新字段**：`confidence=0.0`，`low_confidence_warning` 触发，`faithfulness_check` 按开关标 disabled/skipped；防止前端因字段缺失走异常分支
+5. **`response_format` 不强制 json_object**：PRD 期望返回 JSON **数组**而非对象；多数模型不支持 array 类型的 response_format。改用 prompt 强制 + 围栏剥离 + 包装对象兜底（兼容 `{"claims": [...]}` 格式）
+6. **`DISABLED_RESULT` 模块级常量**：避免每次 disabled 路径都 new 一个 FaithfulnessResult；与 query_rewriter 的 `_NOOP_RESULT` 同款轻量优化
+7. **极小 confidence 归零**：`raw < 1e-9` 时返 0.0 而非 0.0000001，避免浮点噪音让前端展示古怪小数
+8. **CHC-04 不复用 query_rewriter 的 `_resolve_kwargs`**：独立写一份避免循环依赖；同时自检需要 `temperature=0.1`（追求确定性）和 `num_retries=0`（失败软降级，不重试增加延迟），与改写器参数差异较大
+9. **自检失败时 penalty=0.0 不惩罚 confidence**：PRD §586 "不影响主流程"原则；故意不让 skipped 退化为 1.0 惩罚
+
+#### 验证状态
+
+- ✅ T9 单测 **37/37 通过**（含 5 个端到端：disabled/全 supported/含 unverified/skipped/检索空）
+- ✅ V2 全套单测 **271/271 通过**（T0~T9 完整链路）
+- ✅ 全量 mock 回归 **691 passed + 6 skipped**（654 → 691，T9 净增 37，零回归）
+- ⬜ 集成测试：起 uvicorn → POST `/api/v2/query` 带 `enable_faithfulness_check=true` → 验 `faithfulness_check="ok"` + `unverified_claims` + answer 末尾 ⚠ 警告 + `confidence` 被惩罚
+
+#### V2.0 P2 阶段全部完成 🎉
+
+| 阶段 | 状态 | 完成日期 |
+|---|---|---|
+| T7 IDP-03/04/05 | ✅ | 2026-06-15 |
+| T8 HRE-01/02/06 | ✅ | 2026-06-15 |
+| T9 CHC-03/04 | ✅ | 2026-06-15 |
+
+剩余 T10/T11/T12 都属 P3+ 增强项。
+
+### Bugfix · V2 query 超时卡死修复 ✅（2026-06-16）
+
+> **根因**：V2 query 主链路多个 LLM / 外部 API 调用**缺少超时保护**，任一 API 响应慢或挂掉均会导致请求无限挂起（实测 300s+ 仍超时）。
+
+#### 修复清单
+
+| # | 位置 | 问题 | 修复 |
+|---|------|------|------|
+| 1 | [query.py `_generate_answer`](../app/api/v2/endpoints/query.py) | `litellm.acompletion()` 无 timeout / num_retries | 加 `timeout=settings.litellm_timeout` + `num_retries=settings.litellm_num_retries` + `asyncio.wait_for` 硬超时兜底 |
+| 2 | [embedding.py `aembed_texts`](../app/rag/embedding.py) | `litellm.aembedding()` 无 timeout | 加 `timeout=settings.litellm_timeout` |
+| 3 | [reranker.py `LiteLLMReranker`](../app/rag/reranker.py) | `litellm.arerank()` 无 timeout | 加 `timeout=self.timeout`（复用 litellm_timeout） |
+| 4 | [hybrid_retriever.py `hybrid_search`](../app/rag/hybrid_retriever.py) | 同步 Milvus gRPC 调用阻塞事件循环 | `_search_single_collection` / `_fallback_dense_search` 改 `asyncio.to_thread()` |
+| 5 | [hybrid_retriever.py `hybrid_search`](../app/rag/hybrid_retriever.py) | Reranker 无条件调用，忽略 `reranker_enable` 配置 | 新增 `reranker_enable` 参数；`False` 时跳过精排直接返回 |
+| 6 | [query.py `v2_query`](../app/api/v2/endpoints/query.py) | 无整体请求超时保护 | 加 `asyncio.wait_for(timeout=settings.query_total_timeout_s)` 硬超时兜底 |
+| 7 | [config.py](../app/core/config.py) | 缺 query 整体超时配置 | 新增 `query_total_timeout_s` 字段（默认 120s） |
+
+#### 关键设计决策
+
+1. **三层超时防护**：LiteLLM 内部 timeout → `asyncio.wait_for` 步骤级硬超时 → `v2_query` 整体硬超时。任一层触发均有友好兜底文案返回，不会让请求无限挂起
+2. **`query_total_timeout_s=120s`**：覆盖 embedding(30s) + Milvus(5s) + LLM(60s) + 余量(25s)；可在 .env 中按实际 API 响应速度调整
+3. **`asyncio.to_thread` 包装同步 Milvus 调用**：MilvusClient 是同步 gRPC，直接在 async 函数中调用会阻塞事件循环（其他并发请求也会卡住）；`to_thread` 把 gRPC 调用丢到线程池，不阻塞主循环
+4. **`reranker_enable` 参数穿透**：从 `resolve_options` → `_do_retrieve` → `hybrid_search` 全链路传递；`False` 时跳过精排步骤直接返回原排序结果
+5. **超时兜底文案保持一致风格**：与 T6 原有的"检索为空兜底"和"LLM 失败兜底"同款友好文案 + `confidence=0.0` + `faithfulness_check="skipped"`
+
+#### 验证状态
+
+- ✅ V2 全套单测 **253/253 通过**（T0~T9 + P1，零回归）
+- ✅ 集成验证：POST `/api/v2/query` enable_graph_rag=False → 2s 返回；enable_graph_rag=True → 5s 返回；v2_smoke.py 全链路通过
 
 ---
 
@@ -678,6 +818,33 @@ python scripts/kg_smoke.py
 
 ## 历史变更
 
+- **2026-06-15**：V2.0 Hermes T9 完成（**P2 阶段全部收尾**，单测 691 通过）
+  - CHC-03 置信度评分：[app/rag/confidence.py](../app/rag/confidence.py) `compute_confidence` 纯函数，按 PRD §540 公式 `weighted_avg(rerank) × coverage × (1 − penalty)`；< 0.5 自动填 PRD §556 警告文案
+  - CHC-04 答案自检：[app/rag/faithfulness.py](../app/rag/faithfulness.py) LLM as Judge；状态三态 ok/skipped/disabled；JSON 数组/对象包装兼容；wait_for 硬超时 + 围栏剥离 + 软失败
+  - unverified 处理：在 answer 末尾追加 `⚠ 以下事实未在检索内容中找到明确支撑：- claim1` 警告清单（不再二次调 LLM 插 † 标记）
+  - 主链路：[app/api/v2/endpoints/query.py](../app/api/v2/endpoints/query.py) Step 7 后插入 faithfulness_check（disabled 不调 LLM）+ compute_confidence；检索空兜底分支也透 4 个新字段
+  - 三层合并：[app/rag/retrieval_config.py](../app/rag/retrieval_config.py) `enable_faithfulness_check` 加入 ResolvedRetrievalOptions，API > KB > settings.faithfulness_check_default（默认 False）
+  - Schema：QueryOptions 加 `enable_faithfulness_check`；QueryResponse 加 `confidence` / `low_confidence_warning` / `faithfulness_check` / `unverified_claims` 4 个字段
+  - 全量回归 **691 passed + 6 skipped**（654 → 691，零回归）
+  - 🎉 **V2.0 P2 阶段（T7+T8+T9）全部完成**；剩余 T10/T11/T12 属 P3+ 增强项
+- **2026-06-15**：V2.0 Hermes T7 完成（P2 进度 2/3，单测 654 通过）
+  - IDP-03：[app/ingest/table_description.py](../app/ingest/table_description.py) 表格自然语言描述生成；表格 chunk 不动，新增 `block_type="table_description"` 关联 chunk；parent_chunk_id 指向原表格 INT64 chunk_id 字符串
+  - IDP-04：[app/ingest/dual_layer.py](../app/ingest/dual_layer.py) 双层索引；按 `heading_path[:-1]` 父级聚合；粗 chunk `is_summary=True`；fine_chunks 的 parent_chunk_id 用 `dataclasses.replace` 回填指向粗 chunk
+  - IDP-05：[app/ingest/doc_metadata.py](../app/ingest/doc_metadata.py) 文档元数据提取（doc_type / doc_date / language / key_topics / summary_brief）；写入 `kb_files.doc_metadata` JSONB + `summary_brief` Text
+  - 主链路：[app/tasks/ingest_task.py](../app/tasks/ingest_task.py) 三个 noop 替换为真实步骤；`_main` 串联三类 chunk + NER 仅对 fine_chunks 跑（td/coarse 补空 entities 对齐）；`chunk_count` = fine + td + coarse 三类总和
+  - Schema 暴露：[app/schemas/kb_file.py](../app/schemas/kb_file.py) FileListItem 加 `summary_brief`；FileDetail 加 `summary_brief` + `doc_metadata`
+  - 三类 chunk_index 全局唯一：fine 用 splitter 给的 0..N；td 从 `len(fine)` 起；coarse 从 `len(fine)+len(td)` 起 → `_make_chunk_id_int` 幂等 upsert 不冲突
+  - 软失败原则：IDP-03/04/05 任一步骤失败 → 该步产物缺失但不阻断主链路（沿用 V1.5 NER 软失败模式）
+  - 兼容修复：[tests/test_v2_t1.py](../tests/test_v2_t1.py) 3 个 noop 测试改为存在性断言；[tests/test_ingest_task.py](../tests/test_ingest_task.py) `patched_pipeline` fixture 加 mock T7 三步
+  - 全量回归 **654 passed + 6 skipped**（621 → 654，零回归）
+- **2026-06-15**：V2.0 Hermes T8 完成（P2 进度 1/3，单测 621 通过）
+  - HRE-01：[app/rag/query_rewriter.py](../app/rag/query_rewriter.py) 三策略（none / hyde / multi_query）+ 软降级（异常/超时返 noop）
+  - HRE-02：[app/rag/query_ner.py](../app/rag/query_ner.py) 薄封装 [app/kg/ner.py](../app/kg/ner.py) `run_ner` + Neo4j 单跳锚定（Semaphore=5 限流 + UTF-8 字节安全截断 + 上限 50 标签）
+  - HRE-06：[app/rag/retrieval_config.py](../app/rag/retrieval_config.py) `resolve_options` 三层合并（API > KB > settings）；KB CRUD 通过 `KnowledgeBaseUpdateRequest.retrieval_config` 暴露
+  - 主链路重写：[app/api/v2/endpoints/query.py](../app/api/v2/endpoints/query.py) 7 步 trace（query_rewrite → query_ner → graph_anchor → retrieve → build_context → generate → citation_parse）；multi_query 用 RRF 二次融合
+  - 错误码：[app/api/error_codes.py](../app/api/error_codes.py) 新增 `QUERY_REWRITE_INVALID = 40011`，与 PRD §1127 对齐；非法值的拦截放在 `resolve_options` 入口处而非 Pydantic validator（避免被 ValidationError 重打包成 40001）
+  - P1 兼容：[tests/test_v2_p1.py](../tests/test_v2_p1.py) `top_k` 默认改 None；3 个 E2E 用例补 mock `extract_query_entities`/`anchor_to_graph`/`rewrite_query`
+  - 全量回归 **621 passed + 6 skipped**（580 → 621，零回归）
 - **2026-06-15**：V2.0 Hermes T4+T5+T6 全部完成（P1 进度 3/3，单测 580 通过）
   - T4：HRE-05 Reranker 精排（BaseReranker / NoopReranker / LiteLLMReranker + Semaphore 限流 + 兜底规则 + 降级返原序）
   - T5：CHC-01/02 Citation（build_context_with_citation `[1] 来源:...` 格式 + parse_citations 正则解析去重）

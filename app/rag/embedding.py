@@ -38,6 +38,7 @@ def _build_kwargs(input_texts: list[str]) -> dict[str, Any]:
     kwargs: dict[str, Any] = {
         "model": settings.embedding_model,
         "input": input_texts,
+        "timeout": settings.litellm_timeout,  # 复用 LLM 超时作为 Embedding 超时
     }
 
     if settings.embedding_api_key:

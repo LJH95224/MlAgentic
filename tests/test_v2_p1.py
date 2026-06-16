@@ -68,6 +68,7 @@ class TestLiteLLMReranker:
             settings.reranker_api_key = "sk-test"
             settings.reranker_api_base = "https://api.siliconflow.cn/v1"
             settings.reranker_similarity_threshold = 0.3
+            settings.litellm_timeout = 60.0
             mock_settings.return_value = settings
 
             reranker = LiteLLMReranker()
@@ -79,8 +80,8 @@ class TestLiteLLMReranker:
                 MagicMock(index=0, relevance_score=0.85),
             ]
 
-            with patch("app.rag.reranker.litellm") as mock_litellm:
-                mock_litellm.arerank = AsyncMock(return_value=mock_response)
+            with patch("litellm.arerank", new=AsyncMock(return_value=mock_response)):
+                
 
                 chunks = [
                     {"content": "交货地址", "document_id": "d1"},
@@ -102,6 +103,7 @@ class TestLiteLLMReranker:
             settings.reranker_api_key = "sk-test"
             settings.reranker_api_base = "https://api.test.com/v1"
             settings.reranker_similarity_threshold = 0.5
+            settings.litellm_timeout = 60.0
             mock_settings.return_value = settings
 
             reranker = LiteLLMReranker()
@@ -113,8 +115,8 @@ class TestLiteLLMReranker:
                 MagicMock(index=2, relevance_score=0.8),  # 保留
             ]
 
-            with patch("app.rag.reranker.litellm") as mock_litellm:
-                mock_litellm.arerank = AsyncMock(return_value=mock_response)
+            with patch("litellm.arerank", new=AsyncMock(return_value=mock_response)):
+                
 
                 chunks = [
                     {"content": "高相关", "document_id": "d0"},
@@ -139,12 +141,12 @@ class TestLiteLLMReranker:
             settings.reranker_api_key = "sk-test"
             settings.reranker_api_base = "https://api.test.com/v1"
             settings.reranker_similarity_threshold = 0.3
+            settings.litellm_timeout = 60.0
             mock_settings.return_value = settings
 
             reranker = LiteLLMReranker()
 
-            with patch("app.rag.reranker.litellm") as mock_litellm:
-                mock_litellm.arerank = AsyncMock(side_effect=RuntimeError("API down"))
+            with patch("litellm.arerank", new=AsyncMock(side_effect=RuntimeError("API down"))):
 
                 chunks = [
                     {"content": "文档A", "document_id": "d1"},
@@ -166,6 +168,7 @@ class TestLiteLLMReranker:
             settings.reranker_api_key = "sk-test"
             settings.reranker_api_base = "https://api.test.com/v1"
             settings.reranker_similarity_threshold = 0.9  # 极高阈值
+            settings.litellm_timeout = 60.0
             mock_settings.return_value = settings
 
             reranker = LiteLLMReranker()
@@ -177,8 +180,8 @@ class TestLiteLLMReranker:
                 # 其余的分数低于 0.9
             ]
 
-            with patch("app.rag.reranker.litellm") as mock_litellm:
-                mock_litellm.arerank = AsyncMock(return_value=mock_response)
+            with patch("litellm.arerank", new=AsyncMock(return_value=mock_response)):
+                
 
                 chunks = [
                     {"content": "高分", "document_id": "d0"},
@@ -297,7 +300,8 @@ class TestV2QuerySchemas:
 
         req = QueryRequest(query="什么是台风？")
         assert req.query == "什么是台风？"
-        assert req.options.top_k == 5  # 默认值在 options 里
+        # T8 起 top_k 默认为 None（让 resolve_options 三层合并兜到 5）
+        assert req.options.top_k is None
 
     def test_query_request_with_options(self):
         from app.schemas.v2.query import QueryOptions, QueryRequest
@@ -407,7 +411,7 @@ class TestV2QueryE2E:
             "热带气旋[1] 主要发生在西北太平洋。"
         )
 
-        # patch 链路依赖：hybrid_search / Tracer / litellm.acompletion
+        # patch 链路依赖：hybrid_search / Tracer / litellm.acompletion / T8 新增 NER+图谱
         with patch(
             "app.api.v2.endpoints.query.hybrid_search",
             new=AsyncMock(return_value=mock_results),
@@ -416,7 +420,16 @@ class TestV2QueryE2E:
         ) as mock_tracer_cls, patch(
             "litellm.acompletion",
             new=AsyncMock(),
-        ) as mock_acomp:
+        ) as mock_acomp, patch(
+            "app.api.v2.endpoints.query.extract_query_entities",
+            new=AsyncMock(return_value=[]),
+        ), patch(
+            "app.api.v2.endpoints.query.anchor_to_graph",
+            new=AsyncMock(return_value=[]),
+        ), patch(
+            "app.api.v2.endpoints.query.rewrite_query",
+            new=AsyncMock(return_value=__import__("app.rag.query_rewriter", fromlist=["RewriteResult"]).RewriteResult()),
+        ):
             # mock Tracer 上下文：进入 / 退出 / step()
             mock_tracer = MagicMock()
             mock_tracer.trace_id = "trace-test-001"
@@ -436,6 +449,7 @@ class TestV2QueryE2E:
             # 入参 + 调用
             req = QueryRequest(query="什么是台风？")
             mock_db = AsyncMock()
+            mock_db.get = AsyncMock(return_value=None)  # T8: KB 加载
             resp = await v2_query(body=req, db=mock_db)
 
         # 断言：答案正确透传
@@ -472,7 +486,16 @@ class TestV2QueryE2E:
         ) as mock_tracer_cls, patch(
             "litellm.acompletion",
             new=AsyncMock(),
-        ) as mock_acomp:
+        ) as mock_acomp, patch(
+            "app.api.v2.endpoints.query.extract_query_entities",
+            new=AsyncMock(return_value=[]),
+        ), patch(
+            "app.api.v2.endpoints.query.anchor_to_graph",
+            new=AsyncMock(return_value=[]),
+        ), patch(
+            "app.api.v2.endpoints.query.rewrite_query",
+            new=AsyncMock(return_value=__import__("app.rag.query_rewriter", fromlist=["RewriteResult"]).RewriteResult()),
+        ):
             mock_tracer = MagicMock()
             mock_tracer.trace_id = "trace-empty"
             mock_tracer.__aenter__ = AsyncMock(return_value=mock_tracer)
@@ -484,7 +507,9 @@ class TestV2QueryE2E:
             mock_tracer_cls.return_value = mock_tracer
 
             req = QueryRequest(query="不存在的内容")
-            resp = await v2_query(body=req, db=AsyncMock())
+            mock_db = AsyncMock()
+            mock_db.get = AsyncMock(return_value=None)
+            resp = await v2_query(body=req, db=mock_db)
 
         # 检索空 → 走兜底文案 → LLM 不应被调用
         assert "未检索到" in resp.answer
@@ -514,6 +539,15 @@ class TestV2QueryE2E:
         ) as mock_tracer_cls, patch(
             "litellm.acompletion",
             new=AsyncMock(side_effect=RuntimeError("LLM API down")),
+        ), patch(
+            "app.api.v2.endpoints.query.extract_query_entities",
+            new=AsyncMock(return_value=[]),
+        ), patch(
+            "app.api.v2.endpoints.query.anchor_to_graph",
+            new=AsyncMock(return_value=[]),
+        ), patch(
+            "app.api.v2.endpoints.query.rewrite_query",
+            new=AsyncMock(return_value=__import__("app.rag.query_rewriter", fromlist=["RewriteResult"]).RewriteResult()),
         ):
             mock_tracer = MagicMock()
             mock_tracer.trace_id = "trace-err"
@@ -526,7 +560,9 @@ class TestV2QueryE2E:
             mock_tracer_cls.return_value = mock_tracer
 
             req = QueryRequest(query="台风")
-            resp = await v2_query(body=req, db=AsyncMock())
+            mock_db = AsyncMock()
+            mock_db.get = AsyncMock(return_value=None)
+            resp = await v2_query(body=req, db=mock_db)
 
         # LLM 失败 → 走兜底错误文案，不抛异常
         assert "错误" in resp.answer or "RuntimeError" in resp.answer

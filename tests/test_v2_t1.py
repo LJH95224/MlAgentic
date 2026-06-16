@@ -404,23 +404,27 @@ class TestStructuredSplit:
 class TestIngestPipelineSteps:
     """验证 V2 入库管道各步骤的逻辑（不连真服务）。"""
 
-    def test_step_table_description_noop(self):
-        """Step 4 noop 不报错。"""
-        from app.tasks.ingest_task import _step_table_description_noop
+    def test_step_table_description_replaced_in_t7(self):
+        """T7 起 Step 4 不再是 noop —— 旧名 `_step_table_description_noop` 已删，
+        新名 `_step_table_description` 是 async 函数，单测覆盖在 tests/test_v2_t7.py。"""
+        from app.tasks import ingest_task
 
-        _step_table_description_noop([])  # 不抛异常即通过
+        assert hasattr(ingest_task, "_step_table_description")
+        assert not hasattr(ingest_task, "_step_table_description_noop")
 
-    def test_step_summary_noop(self):
-        """Step 5 noop 不报错。"""
-        from app.tasks.ingest_task import _step_summary_noop
+    def test_step_summary_replaced_in_t7(self):
+        """T7 起 Step 5 不再是 noop —— 改名为 `_step_dual_layer_index`。"""
+        from app.tasks import ingest_task
 
-        _step_summary_noop([])
+        assert hasattr(ingest_task, "_step_dual_layer_index")
+        assert not hasattr(ingest_task, "_step_summary_noop")
 
-    def test_step_doc_metadata_noop(self):
-        """Step 6 noop 不报错。"""
-        from app.tasks.ingest_task import _step_doc_metadata_noop
+    def test_step_doc_metadata_replaced_in_t7(self):
+        """T7 起 Step 6 不再是 noop —— 改名为 `_step_doc_metadata`（async）。"""
+        from app.tasks import ingest_task
 
-        _step_doc_metadata_noop(MagicMock(), [])
+        assert hasattr(ingest_task, "_step_doc_metadata")
+        assert not hasattr(ingest_task, "_step_doc_metadata_noop")
 
     def test_step_bm25_auto(self):
         """Step 10 确认步骤不报错。"""

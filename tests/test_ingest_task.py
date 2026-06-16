@@ -212,6 +212,22 @@ def patched_pipeline(monkeypatch):
 
     monkeypatch.setattr(ingest_task, "_step_ner", _fake_safe_ner_step)
 
+    # T7 新增的 IDP 步骤：默认全 mock 为 noop（不改 fine_chunks，不生成 td/coarse，
+    # 不写 doc_metadata），保持原 happy path 行为不变。需要单独验证 T7 路径的测试
+    # 用例可以在自己的 fixture 里再覆盖这三个函数。
+    async def _noop_table_desc(fine_chunks, *, document_id):
+        return []
+
+    async def _noop_dual_layer(fine_chunks, *, td_chunk_count, document_id):
+        return fine_chunks, []
+
+    async def _noop_doc_meta(resources, *, file_record, blocks):
+        return None
+
+    monkeypatch.setattr(ingest_task, "_step_table_description", _noop_table_desc)
+    monkeypatch.setattr(ingest_task, "_step_dual_layer_index", _noop_dual_layer)
+    monkeypatch.setattr(ingest_task, "_step_doc_metadata", _noop_doc_meta)
+
     return parse_mock
 
 

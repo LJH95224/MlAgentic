@@ -71,12 +71,14 @@ class KnowledgeBaseCreateRequest(BaseModel):
 
 
 class KnowledgeBaseUpdateRequest(BaseModel):
-    """PATCH /api/v1/knowledge-bases/{kb_id} 请求体（KB-04）。
+    """PATCH /api/v1/knowledge-bases/{kb_id} 请求体（KB-04 + V2.0 HRE-06）。
 
-    PRD 明确：仅 `name` / `description` 可改；`embedding_dim` / `chunk_size` /
-    `chunk_overlap` 创建后只读，传入直接 422（借 extra="forbid"）。
+    PRD 明确：`embedding_dim` / `chunk_size` / `chunk_overlap` 创建后只读，
+    传入直接 422（借 extra="forbid"）。
+    name / description / retrieval_config 可改，但至少传一个；都不传 → 422。
 
-    name / description 都可选，但至少传一个；两个都不传 → 422。
+    `retrieval_config`（V2.0 HRE-06）：知识库级默认检索配置，None 表示不变更，
+    传 `{}` 表示清空所有覆盖字段，传具体 dict 表示部分覆盖（service 层做 merge）。
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -86,6 +88,10 @@ class KnowledgeBaseUpdateRequest(BaseModel):
     )
     description: str | None = Field(
         None, max_length=500, description="新的知识库描述"
+    )
+    retrieval_config: dict | None = Field(
+        None,
+        description="V2.0 知识库级检索默认配置（HRE-06）；None=不变更，{}=清空，dict=覆盖",
     )
 
     @field_validator("name")
@@ -97,9 +103,14 @@ class KnowledgeBaseUpdateRequest(BaseModel):
 
     @model_validator(mode="after")
     def _require_at_least_one(self) -> "KnowledgeBaseUpdateRequest":
-        # 注意 description 允许显式传 null（用户主动清空描述），所以不能简单看 None
-        if "name" not in self.model_fields_set and "description" not in self.model_fields_set:
-            raise ValueError("至少需要传入 name 或 description 之一")
+        # 注意 description / retrieval_config 都允许显式传 null（清空语义），
+        # 所以判断"是否传过"用 model_fields_set 而非 None
+        if (
+            "name" not in self.model_fields_set
+            and "description" not in self.model_fields_set
+            and "retrieval_config" not in self.model_fields_set
+        ):
+            raise ValueError("至少需要传入 name / description / retrieval_config 之一")
         return self
 
 
@@ -123,6 +134,10 @@ class KnowledgeBaseDetail(BaseModel):
     file_count: int = Field(..., description="冗余统计：关联文件数")
     chunk_count: int = Field(..., description="冗余统计：Milvus 向量切片数")
     entity_count: int = Field(0, description="Neo4j 实体数（S5 阶段接通）")
+    retrieval_config: dict | None = Field(
+        None,
+        description="V2.0 知识库级检索默认配置（HRE-06）",
+    )
     created_at: datetime
 
     @field_validator("status")
@@ -146,6 +161,7 @@ class KnowledgeBaseDetail(BaseModel):
             file_count=kb.file_count,
             chunk_count=kb.chunk_count,
             entity_count=entity_count,
+            retrieval_config=kb.retrieval_config,
             created_at=kb.created_at,
         )
 
