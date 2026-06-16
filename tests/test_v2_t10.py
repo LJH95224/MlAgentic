@@ -344,3 +344,111 @@ class TestRerankEndpoint:
         from app.api.v2.router import router
         paths = [r.path for r in router.routes]
         assert any("/rerank" in p for p in paths), f"/rerank 不在路由中: {paths}"
+
+
+# ──────────────── UQA-03 Generate 端点 ────────────────
+
+
+class TestGenerateEndpoint:
+    """UQA-03 POST /api/v2/generate 端点测试。"""
+
+    @pytest.mark.asyncio
+    async def test_generate_with_citation(self):
+        """自定义 context 被注入 Citation 编号，答案引用正确。"""
+        from app.api.v2.endpoints.generate import v2_generate
+        from app.schemas.v2.generate import GenerateRequest, ContextChunk
+
+        with patch("app.api.v2.endpoints.generate._generate_answer", new_callable=AsyncMock) as mock_gen:
+            mock_gen.return_value = "违约金为合同总额的20%[1]。"
+            body = GenerateRequest(
+                query="合同违约金是多少？",
+                context_chunks=[
+                    ContextChunk(
+                        chunk_id="custom_001",
+                        content="违约金为合同总额的20%...",
+                        source_label="采购合同_2024.pdf P3",
+                    )
+                ],
+            )
+            resp = await v2_generate(body, db=MagicMock())
+            assert "违约金" in resp.answer
+
+    @pytest.mark.asyncio
+    async def test_generate_empty_context_raises(self):
+        """context_chunks 为空时 Pydantic 校验拒绝。"""
+        from app.schemas.v2.generate import GenerateRequest
+        with pytest.raises(Exception):
+            GenerateRequest(query="测试", context_chunks=[])
+
+    @pytest.mark.asyncio
+    async def test_generate_no_milvus_neo4j(self):
+        """generate 不触发任何 Milvus / Neo4j 查询（验证无外部检索 import）。"""
+        from app.api.v2.endpoints.generate import v2_generate
+        from app.schemas.v2.generate import GenerateRequest, ContextChunk
+
+        # 验证 generate 模块没有 import 任何检索模块
+        import app.api.v2.endpoints.generate as gen_mod
+        src = gen_mod.__dict__
+        assert "hybrid_search" not in src, "generate 不应 import hybrid_search"
+        assert "extract_query_entities" not in src, "generate 不应 import NER"
+
+        with patch("app.api.v2.endpoints.generate._generate_answer", new_callable=AsyncMock) as mock_gen:
+            mock_gen.return_value = "测试答案"
+            body = GenerateRequest(
+                query="测试",
+                context_chunks=[
+                    ContextChunk(chunk_id="c1", content="内容", source_label="文档 P1"),
+                ],
+            )
+            resp = await v2_generate(body, db=MagicMock())
+            assert "测试答案" in resp.answer
+
+    @pytest.mark.asyncio
+    async def test_generate_with_faithfulness_check(self):
+        """开启 faithfulness_check 后自检流程正常。"""
+        from app.api.v2.endpoints.generate import v2_generate
+        from app.schemas.v2.generate import GenerateRequest, ContextChunk, GenerateOptions
+        from app.rag.faithfulness import FaithfulnessResult
+
+        with patch("app.api.v2.endpoints.generate._generate_answer", new_callable=AsyncMock) as mock_gen, \
+             patch("app.api.v2.endpoints.generate.check_faithfulness", new_callable=AsyncMock) as mock_faith:
+            mock_gen.return_value = "答案内容[1]。"
+            mock_faith.return_value = FaithfulnessResult(
+                status="ok",
+                claims=[{"claim": "事实1", "status": "supported", "source_text": "原文"}],
+                unverified=[],
+                hallucination_penalty=0.0,
+            )
+            body = GenerateRequest(
+                query="测试",
+                context_chunks=[
+                    ContextChunk(chunk_id="c1", content="内容", source_label="文档 P1"),
+                ],
+                options=GenerateOptions(enable_faithfulness_check=True),
+            )
+            resp = await v2_generate(body, db=MagicMock())
+            assert resp.faithfulness_check == "ok"
+
+    @pytest.mark.asyncio
+    async def test_generate_no_citation(self):
+        """关闭 citation 时 source_citations 为空。"""
+        from app.api.v2.endpoints.generate import v2_generate
+        from app.schemas.v2.generate import GenerateRequest, ContextChunk, GenerateOptions
+
+        with patch("app.api.v2.endpoints.generate._generate_answer", new_callable=AsyncMock) as mock_gen:
+            mock_gen.return_value = "答案文本。"
+            body = GenerateRequest(
+                query="测试",
+                context_chunks=[
+                    ContextChunk(chunk_id="c1", content="内容1", source_label="文档1"),
+                ],
+                options=GenerateOptions(enable_citation=False),
+            )
+            resp = await v2_generate(body, db=MagicMock())
+            assert resp.source_citations == []
+
+    def test_generate_router_registered(self):
+        """验证 /generate 路由已注册。"""
+        from app.api.v2.router import router
+        paths = [r.path for r in router.routes]
+        assert any("/generate" in p for p in paths), f"/generate 不在路由中: {paths}"

@@ -492,7 +492,18 @@
 
 - ✅ A.1 单测 **4/4 通过**（similarity_threshold 透传全链路）
 - ✅ V2 全套单测 **309/309 通过**（零回归）
-- ⬜ 集成验证：起 worker + 跑 `python scripts/eval_compare.py --kb-id <UUID> --eval-set eval_set_smoke.json`
+- ✅ 集成验证：4 组实验全部跑完，结果见 [eval_a1_reranker_tuning.md](eval_a1_reranker_tuning.md)
+
+#### A.1 实验结果摘要
+
+| 实验 | faithfulness | answer_relevancy | context_precision | context_recall | overall_score |
+|---|---|---|---|---|---|
+| **A1 baseline** (无 reranker) | 0.533 | **0.423** | 0.559 | **0.367** | **0.471** |
+| B0 reranker + thresh=0.3 | 0.307 | 0.190 | 0.167 | 0.067 | 0.183 |
+| B1 reranker + thresh=0.1 | **0.673** | 0.230 | 0.533 | 0.217 | 0.413 |
+| B2 reranker + thresh=0.0 | 0.285 | 0.234 | **0.647** | 0.317 | 0.370 |
+
+**结论**：当前 Reranker 模型（Qwen3-Reranker-8B）弊大于利。即使 threshold=0.0（纯精排不过滤），overall 仍比 baseline 低 -0.100。**生产环境推荐 `RERANKER_TYPE=none`**。下一步：切换 bge-reranker-v2-m3 重测，或增加文档量后重测。
 
 ---
 
