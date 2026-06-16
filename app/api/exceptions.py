@@ -64,6 +64,8 @@ HTTP_STATUS_BY_CODE: dict[int, int] = {
     error_codes.PARAM_INVALID: HTTPStatus.BAD_REQUEST,            # 400
     error_codes.IMMUTABLE_FIELD: HTTPStatus.BAD_REQUEST,          # 400
     error_codes.QUERY_REWRITE_INVALID: HTTPStatus.BAD_REQUEST,    # 400 (V2.0 HRE-01)
+    error_codes.EVAL_DATASET_EMPTY: HTTPStatus.BAD_REQUEST,       # 400 (V2.0 EVA-01)
+    error_codes.EVAL_DATASET_TOO_LARGE: HTTPStatus.BAD_REQUEST,   # 400 (V2.0 EVA-01)
     error_codes.NOT_FOUND: HTTPStatus.NOT_FOUND,                  # 404
     error_codes.NAME_CONFLICT: HTTPStatus.CONFLICT,               # 409
     error_codes.FILE_TOO_LARGE: HTTPStatus.REQUEST_ENTITY_TOO_LARGE,  # 413

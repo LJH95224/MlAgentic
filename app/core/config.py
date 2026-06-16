@@ -166,6 +166,16 @@ class Settings(BaseSettings):
     # 默认 120s：embedding(30s) + Milvus(5s) + LLM(60s) + 余量(25s)
     query_total_timeout_s: float = Field(default=120.0, alias="QUERY_TOTAL_TIMEOUT_S")
 
+    # --- RAGAS 评估（EVA-01/02/03，T11 阶段启用） ---
+    # 评估时 LLM-as-Judge 用的模型；留空复用 LITELLM_MODEL（与 KG_NER_MODEL 同款解耦）
+    eval_llm_model: str | None = Field(default=None, alias="EVAL_LLM_MODEL")
+    # 单次评估集硬上限题数（PRD §1147 风险表："评估集硬上限 100 条"，防误传 1000 题烧 token）
+    eval_max_questions: int = Field(default=100, alias="EVAL_MAX_QUESTIONS", ge=1, le=500)
+    # ragas 内部并发上限（避免厂商限流；评估期不追求时延，串行/小并发更稳）
+    eval_concurrency: int = Field(default=3, alias="EVAL_CONCURRENCY", ge=1, le=10)
+    # 单题 RAG 跑通 + ragas 打分的硬超时（秒），超时记 None 不阻断整批
+    eval_question_timeout_s: float = Field(default=60.0, alias="EVAL_QUESTION_TIMEOUT_S")
+
     # ============================================================
     # V1.5 新增（数据管理层 · 2026-06-11 起启用）
     # ============================================================

@@ -216,7 +216,7 @@ async def _v2_query_inner(
 
         # ── Step 6: LLM 生成 ──
         with tracer.step("generate", step_input={"model": settings.litellm_model}) as gen_step:
-            answer = await _generate_answer(
+            answer = await generate_answer(
                 query=body.query,
                 context=context,
                 session_id=body.session_id,
@@ -310,6 +310,7 @@ async def _do_retrieve(
             entity_tags=tags_kw,
             rrf_k=resolved.rrf_k,
             reranker_enable=resolved.reranker_enable,
+            similarity_threshold=resolved.similarity_threshold,
         )
 
     # none / hyde / multi_query 但子查询为空（软降级）→ 单路检索
@@ -319,6 +320,7 @@ async def _do_retrieve(
         top_k=resolved.top_k,
         entity_tags=tags_kw,
         reranker_enable=resolved.reranker_enable,
+        similarity_threshold=resolved.similarity_threshold,
     )
 
 
@@ -329,13 +331,17 @@ async def _multi_query_search(
     entity_tags: list[str] | None,
     rrf_k: int,
     reranker_enable: bool = True,
+    similarity_threshold: float | None = None,
 ) -> list[HybridSearchResult]:
     """N 路检索结果 RRF 二次融合，按 chunk_id 去重 + rank-based 重算分数。
 
     任一路失败（return_exceptions=True 收到 Exception）→ warning 跳过，其他继续。
     """
     coros = [
-        hybrid_search(query=q, top_k=top_k, entity_tags=entity_tags, reranker_enable=reranker_enable) for q in queries
+        hybrid_search(query=q, top_k=top_k, entity_tags=entity_tags,
+                      reranker_enable=reranker_enable,
+                      similarity_threshold=similarity_threshold)
+        for q in queries
     ]
     raw = await asyncio.gather(*coros, return_exceptions=True)
 
@@ -382,14 +388,14 @@ async def _multi_query_search(
     return merged
 
 
-async def _generate_answer(
+async def generate_answer(
     *,
     query: str,
     context: str,
     session_id: uuid.UUID | None,
     db: AsyncSession,
 ) -> str:
-    """调用 LLM 生成答案。
+    """调用 LLM 生成答案（V2 query 主链路 + T11 评估管道共用）。
 
     使用 LiteLLM acompletion，注入 citation 规则的 system prompt。
     超时保护：litellm_timeout + asyncio.wait_for 双重兜底。

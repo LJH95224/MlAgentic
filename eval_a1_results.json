@@ -1,0 +1,46 @@
+[
+  {
+    "experiment": "baseline",
+    "label": "A1 baseline (no reranker)",
+    "summary": {
+      "faithfulness": 0.5333333333333333,
+      "answer_relevancy": 0.42340371289262746,
+      "context_precision": 0.558888888850037,
+      "context_recall": 0.36666666666666664,
+      "overall_score": 0.4705731504356661
+    }
+  },
+  {
+    "experiment": "rerank_thresh_0.3",
+    "label": "B0 reranker + thresh=0.3",
+    "summary": {
+      "faithfulness": 0.30666666666666664,
+      "answer_relevancy": 0.19002830460909706,
+      "context_precision": 0.16666666665,
+      "context_recall": 0.06666666666666667,
+      "overall_score": 0.18250707614810757
+    }
+  },
+  {
+    "experiment": "rerank_thresh_0.1",
+    "label": "B1 reranker + thresh=0.1",
+    "summary": {
+      "faithfulness": 0.6733333333333333,
+      "answer_relevancy": 0.22998540448868504,
+      "context_precision": 0.53333333328,
+      "context_recall": 0.21666666666666665,
+      "overall_score": 0.4133296844421713
+    }
+  },
+  {
+    "experiment": "rerank_thresh_0.0",
+    "label": "B2 reranker + thresh=0.0",
+    "summary": {
+      "faithfulness": 0.28476190476190477,
+      "answer_relevancy": 0.23367704153427607,
+      "context_precision": 0.6466666666184444,
+      "context_recall": 0.31666666666666665,
+      "overall_score": 0.370443069895323
+    }
+  }
+]

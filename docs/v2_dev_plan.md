@@ -409,4 +409,20 @@ class StructuredBlock:
 
 ---
 
+### ✅ T11 完成 · 2026-06-16
+
+- **EVA-01 创建评估**：[app/api/v2/endpoints/evaluations.py](../app/api/v2/endpoints/evaluations.py) `POST /api/v2/knowledge-bases/{kb_id}/evaluate`；校验 KB + 评估集（空→40012 / 超 100 题→40013）；写 EvalTask 行 → `run_evaluation_task.delay(eval_id)` → 立即返 eval_task_id；Celery 不可达映射 50300
+- **EVA-02 进度+结果查询**：`GET /api/v2/knowledge-bases/{kb_id}/evaluations/{eval_task_id}` → EvalDetailResponse（含 summary 4 项指标 + details N 条 + retrieval_options 快照 + progress / status / error_message）
+- **EVA-03 评估历史**：`GET /api/v2/knowledge-bases/{kb_id}/evaluations` → 按 `(created_at desc, id desc)` 分页（默认 page_size=20，最大 100）
+- **eval_runner**：[app/rag/eval_runner.py](../app/rag/eval_runner.py) `run_single_query_for_eval` 复用 hybrid_search + build_context_with_citation + generate_answer（query.py 主链路 `_generate_answer` 改名为 public `generate_answer`）；不写 Trace + 不调 faithfulness_check + multi_query 禁用；hybrid/LLM 任一步失败软降级
+- **ragas_evaluator**：[app/rag/ragas_evaluator.py](../app/rag/ragas_evaluator.py) `evaluate_with_ragas` 用 ragas 0.2+ API（SingleTurnSample + Faithfulness/AnswerRelevancy/ContextPrecision/ContextRecall + raise_exceptions=False）；LLM/Embedding 经 LangChain ChatOpenAI / OpenAIEmbeddings(base_url=) 适配 LiteLLM；ragas 模块懒加载，缺失时整批返 None summary 不阻断
+- **Celery 任务**：[app/tasks/eval_task.py](../app/tasks/eval_task.py) `run_evaluation_task` 同步壳 + `_run_evaluation_main` async；范式严格对齐 session_task（asyncio.run + task_resources）；progress 5→90→95→100；单题超时不阻断整批；LLM 配置缺失提前 failed
+- **配置**：[app/core/config.py](../app/core/config.py) V2.0 区段加 4 字段（eval_llm_model / eval_max_questions=100 / eval_concurrency=3 / eval_question_timeout_s=60）
+- **错误码**：40012 EVAL_DATASET_EMPTY / 40013 EVAL_DATASET_TOO_LARGE 注册到 [error_codes.py](../app/api/error_codes.py) + [exceptions.py](../app/api/exceptions.py) HTTP 400
+- **NaN → None**：ragas 单题返 NaN 时 `_to_float_or_none` 清洗后写 JSONB（PG JSONB 不接受 NaN）
+- **单测**：34 个新用例（[tests/test_v2_t11.py](../tests/test_v2_t11.py)）—— Schemas 4 + ragas helpers 3 + evaluate_with_ragas 4 + eval_runner 4 + resolve_kwargs 4 + Celery 主流程 4 + API endpoints 8 + router 注册 2 + 错误码 1
+- **回归**：V2 全套测试 271 → **305 passed**（T11 净增 34，零回归）；全量 mock 测试 709 passed + 40 skipped 全绿
+
+---
+
 *TyAgent V2.0 Dev Plan · End of Document*

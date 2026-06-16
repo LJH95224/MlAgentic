@@ -35,6 +35,8 @@ _TASK_MODULES: list[str] = [
     "app.tasks.ingest_task",
     # S4 阶段（2026-06-11 起）：会话标题 / 摘要异步生成
     "app.tasks.session_task",
+    # T11 阶段（2026-06-16 起）：RAGAS 评估
+    "app.tasks.eval_task",
 ]
 
 

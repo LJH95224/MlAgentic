@@ -129,13 +129,18 @@ class SiliconFlowReranker(BaseReranker):
     # 并发控制：避免 API 限流
     _semaphore = asyncio.Semaphore(5)
 
-    def __init__(self):
+    def __init__(self, *, similarity_threshold: float | None = None):
         settings = get_settings()
         self.model = settings.reranker_model or "BAAI/bge-reranker-v2-m3"
         self.api_key = settings.reranker_api_key
         # api_base 形如 https://api.siliconflow.cn/v1，rerank 端点为 /rerank
         self.api_base = (settings.reranker_api_base or "").rstrip("/")
-        self.similarity_threshold = settings.reranker_similarity_threshold
+        # 运行时覆盖 similarity_threshold（用于 A.1 调优实验）；
+        # 不传则用 settings 全局值
+        self.similarity_threshold = (
+            similarity_threshold if similarity_threshold is not None
+            else settings.reranker_similarity_threshold
+        )
         self.timeout = settings.litellm_timeout  # 复用 LLM 超时
 
     async def rerank(
@@ -260,12 +265,16 @@ class LiteLLMReranker(BaseReranker):
     # 并发控制：避免 API 限流
     _semaphore = asyncio.Semaphore(5)
 
-    def __init__(self):
+    def __init__(self, *, similarity_threshold: float | None = None):
         settings = get_settings()
         self.model = settings.reranker_model or "BAAI/bge-reranker-v2-m3"
         self.api_key = settings.reranker_api_key
         self.api_base = settings.reranker_api_base
-        self.similarity_threshold = settings.reranker_similarity_threshold
+        # 运行时覆盖 similarity_threshold（用于 A.1 调优实验）
+        self.similarity_threshold = (
+            similarity_threshold if similarity_threshold is not None
+            else settings.reranker_similarity_threshold
+        )
         self.timeout = settings.litellm_timeout
 
     async def rerank(
@@ -383,8 +392,12 @@ def _fallback(chunks: list[dict], top_k: int) -> list[RerankResult]:
 # ──────────────── 工厂函数 ────────────────
 
 
-def get_reranker() -> BaseReranker:
+def get_reranker(*, similarity_threshold: float | None = None) -> BaseReranker:
     """根据配置创建 Reranker 实例。
+
+    Args:
+        similarity_threshold: 运行时覆盖 similarity_threshold；
+            不传则用 settings 全局值。用于评估调优实验，避免改 .env 重启。
 
     - reranker_type=none → NoopReranker
     - reranker_type=api + api_base 含 siliconflow → SiliconFlowReranker
@@ -397,9 +410,9 @@ def get_reranker() -> BaseReranker:
         api_base = settings.reranker_api_base or ""
         # SiliconFlow 走专用 Reranker（绕过 litellm.arerank 不支持的问题）
         if "siliconflow" in api_base.lower():
-            return SiliconFlowReranker()
+            return SiliconFlowReranker(similarity_threshold=similarity_threshold)
         # 其他 provider（Jina / Cohere 等）走 LiteLLM 原生路由
-        return LiteLLMReranker()
+        return LiteLLMReranker(similarity_threshold=similarity_threshold)
     else:
         return NoopReranker()
 

@@ -8,9 +8,11 @@
 后续阶段会陆续注册：
 - S3：app.tasks.ingest_task.parse_and_ingest_task（文件解析入库）★ 2026-06-11 完整实现
 - S4：app.tasks.session_task.generate_session_{title,summary}_task ★ 2026-06-11 已实现
+- T11：app.tasks.eval_task.run_evaluation_task（RAGAS 评估）★ 2026-06-16 已实现
 """
 
 from app.tasks.celery_app import celery_app
+from app.tasks.eval_task import run_evaluation_task
 from app.tasks.ingest_task import parse_and_ingest_task
 from app.tasks.ping import ping_task
 from app.tasks.session_task import (
@@ -24,4 +26,5 @@ __all__ = [
     "parse_and_ingest_task",
     "generate_session_title_task",
     "generate_session_summary_task",
+    "run_evaluation_task",
 ]

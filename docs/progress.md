@@ -63,7 +63,7 @@
 | T8 | HRE-01/02/06（Query 改写 + NER + 配置项） | P2 | P2 | ✅ 完成 + 单测验收 | 2026-06-15 |
 | T9 | CHC-03/04（置信度 + 答案自检） | P2 | P2 | ✅ 完成 + 单测验收 | 2026-06-15 |
 | T10 | UQA-02/03/04（分层子接口） | P3 | P3 | ⬜ 待开始 | — |
-| T11 | EVA-01/02/03（RAGAS 评估） | P3 | P3 | ⬜ 待开始 | — |
+| T11 | EVA-01/02/03（RAGAS 评估） | P3 | P3 | ✅ 完成 + 单测验收 | 2026-06-16 |
 | T12 | OBS-03（聚合统计） | P4 | P4 | ⬜ 待开始 | — |
 
 ### 已确认的关键决策
@@ -413,6 +413,86 @@
 
 - ✅ V2 全套单测 **253/253 通过**（T0~T9 + P1，零回归）
 - ✅ 集成验证：POST `/api/v2/query` enable_graph_rag=False → 2s 返回；enable_graph_rag=True → 5s 返回；v2_smoke.py 全链路通过
+
+### T11 · RAGAS 评估 ✅（2026-06-16）
+
+#### 交付内容
+
+| 子任务 | 实现位置 | 备注 |
+|---|---|---|
+| **T11.1 配置项扩展** | [app/core/config.py](../app/core/config.py)（V2.0 区段新增 4 字段：eval_llm_model / eval_max_questions / eval_concurrency / eval_question_timeout_s） | 默认上限 100 题 + 单题超时 60s |
+| **T11.1 Eval Schema** | [app/schemas/v2/eval.py](../app/schemas/v2/eval.py)（EvalQAItem / EvalCreateRequest / EvalRetrievalOptions / EvalCreateResponse / EvalSummary / EvalDetailItem / EvalDetailResponse / EvalListItem / EvalListResponse） | 4 项指标 + overall_score；[0,1] 范围校验 |
+| **T11.1 错误码 40012/40013** | [app/api/error_codes.py](../app/api/error_codes.py)（EVAL_DATASET_EMPTY = 40012 / EVAL_DATASET_TOO_LARGE = 40013） + [app/api/exceptions.py](../app/api/exceptions.py) HTTP 400 注册 | 紧跟 query_rewrite 的 40011 |
+| **T11.2 generate_answer public 化** | [app/api/v2/endpoints/query.py](../app/api/v2/endpoints/query.py)（`_generate_answer → generate_answer`） | 仅函数改名，主链路逻辑零改动；让 eval_runner 能 import |
+| **T11.2 单题 RAG 执行器** | [app/rag/eval_runner.py](../app/rag/eval_runner.py)（`run_single_query_for_eval`） | 复用 hybrid_search + build_context + generate_answer；不写 Trace；不调 faithfulness_check（ragas 自己跑）；强制 single 路径不开 multi_query |
+| **T11.3 RAGAS 评估管道** | [app/rag/ragas_evaluator.py](../app/rag/ragas_evaluator.py)（`evaluate_with_ragas` + `_to_float_or_none` + `_compute_overall` + `_build_evaluator_llm` + `_build_evaluator_embeddings`） | ragas 0.2+ API：SingleTurnSample（user_input/retrieved_contexts/response/reference）+ Faithfulness/AnswerRelevancy/ContextPrecision/ContextRecall；LiteLLM 经 LangChain ChatOpenAI(base_url=) 适配 |
+| **T11.4 Celery 评估任务** | [app/tasks/eval_task.py](../app/tasks/eval_task.py)（`run_evaluation_task` 同步壳 + `_run_evaluation_main` async + `_resolve_eval_llm_kwargs` + `_mark_failed_safe`） | 范式严格对齐 session_task：asyncio.run + task_resources；progress 5→90→95→100；单题超时软降级 |
+| **T11.4 任务注册** | [app/tasks/__init__.py](../app/tasks/__init__.py) + [app/tasks/celery_app.py](../app/tasks/celery_app.py) `_TASK_MODULES` 追加 `app.tasks.eval_task` | worker 启动时自动 import |
+| **T11.5 EVA-01/02/03 端点** | [app/api/v2/endpoints/evaluations.py](../app/api/v2/endpoints/evaluations.py)（`create_evaluation` POST /evaluate + `get_evaluation` GET /{id} + `list_evaluations` GET 列表 + `_extract_summary` / `_extract_details` / `_row_to_detail` 辅助） | PRD §777-863 完整对齐；3 个端点均挂在 /api/v2/knowledge-bases/{kb_id}/... 下 |
+| **T11.5 V2 router 挂载** | [app/api/v2/router.py](../app/api/v2/router.py)（追加 `evaluations.create_router` + `evaluations.router`） | 两个 router 区分 POST `/evaluate` 与 GET `/evaluations[/{id}]` 路径 |
+| **T11.6 单测** | [tests/test_v2_t11.py](../tests/test_v2_t11.py)（34 用例） | Schemas 4 + ragas helpers 3 + evaluate_with_ragas 4 + eval_runner 4 + resolve_kwargs 4 + Celery 主流程 4 + API endpoints 8 + router 注册 2 + 错误码 1 |
+
+#### 关键设计决策
+
+1. **不绕 HTTP 调 /v2/query**：评估 worker 与 uvicorn 不在同一进程，httpx 调用要求 worker 能解析到 host:port，部署复杂。直接 import `hybrid_search` / `generate_answer` 等内部函数，零网络依赖
+2. **`_generate_answer → generate_answer` 只改名不改语义**：让 eval_runner 能 public import；query.py 主链路其余逻辑零变动，T6/T9 已过的测试零回归
+3. **eval_runner 不写 Trace**：评估场景每题写 ~7 条 step 会污染 agent_traces 表（100 题 = 700 行），且 ragas 自身有 trace；评估期主动跳过 `Tracer` 上下文管理器
+4. **eval_runner 不调 faithfulness_check**：T9 的 `check_faithfulness` 是单题实时自检；ragas 的 Faithfulness 指标用更标准的算法（claim 拆解 + verification），重复跑浪费 LLM 调用
+5. **multi_query 评估期禁用**：multi_query 每题烧 2~4 次 LLM 改写 token，性价比差；评估期强制 single 路径用 rewritten_text 或原 query
+6. **ragas LLM/Embedding 经 LangChain 适配**：`LangchainLLMWrapper(ChatOpenAI(base_url=...))`；LiteLLM 完全兼容 OpenAI 协议，无需 ragas 自定义 wrapper。embedding 同款 `LangchainEmbeddingsWrapper(OpenAIEmbeddings)`
+7. **ragas 模块懒加载**：`from ragas import evaluate` 推迟到 `evaluate_with_ragas` 函数内；环境无 ragas（或 ragas 内部 import 链路坏）→ 整批返 summary 全 None + error 字段，不阻断 EvalTask 落库
+8. **NaN / Inf → None**：ragas 单题失败返 NaN；用 `_to_float_or_none` 清洗后写 JSONB，避免 PG 序列化 NaN 报错（PG JSONB 不接受 NaN）
+9. **eval_dataset 完整存 JSONB**：question + ground_truth 原样保留；评估期生成的 answer + contexts 也写入 `eval_result.samples`，便于复跑指标 / 调试
+10. **超 100 题硬拒绝不偷偷截断**：返 40013 让前端明确知道；保留 `EVAL_MAX_QUESTIONS` 配置可调（最大 500）
+11. **Celery 调度失败映射 50300**：复用现有 `CELERY_UNAVAILABLE`（V1.5 文件入库管道同款），HTTP 503 + 友好文案
+12. **EvalTask 落库再 .delay**：先 commit 拿 id 再投递任务；即使 Celery 不可达，行已在表里，可手工触发 / 重启 worker 后捞起
+13. **summary 写回字段越界自动归 None**：`_extract_summary` 拿 JSONB 里的脏数据时用 `0.0 ≤ f ≤ 1.0` 区间检查 + 非数置 None；前端永远拿到合法 [0,1] 或 None，不会崩
+
+#### 验证状态
+
+- ✅ T11 单测 **38/38 通过**（原 34 + A.1 调优 4 = 38）
+- ✅ V2 全套单测 **309/309 通过**（T0~T9 + Bugfix + T11 = 305 → 309，A.1 净增 4，零回归）
+- ✅ 全量 mock 回归 **709 passed + 40 skipped**（V1.5 + V2 全部，零回归；test_kb_service.py 的 10 个 ERROR 在 HEAD 自带，与 T11 无关）
+- ⬜ 用户手动安装 ragas：`uv pip install ragas -i https://pypi.tuna.tsinghua.edu.cn/simple`
+- ⬜ 集成验证：起 worker + 真发 POST /api/v2/knowledge-bases/{kb_id}/evaluate 跑 5 题评估 → 轮询 GET /evaluations/{id} 验 status pending→processing→completed，summary 4 项指标都在 [0,1]
+
+### A.1 · Reranker 调优工具链 🔧（2026-06-16）
+
+> T11 评估实验暴露核心问题：Reranker 开启后 overall -0.231（主因 context_precision 0.591→0.218），
+> 怀疑 `RERANKER_SIMILARITY_THRESHOLD=0.3` 过滤了优质 chunk。A.1 目标是通过参数对比实验找到最优阈值。
+
+#### 交付内容
+
+| 子任务 | 实现位置 | 备注 |
+|---|---|---|
+| **similarity_threshold 运行时覆盖** | [app/rag/reranker.py](../app/rag/reranker.py)（SiliconFlowReranker / LiteLLMReranker 构造函数加 `similarity_threshold` 可选参数；`get_reranker()` 同款） | 不改 .env 就能跑不同阈值的对比实验 |
+| **hybrid_search 透传** | [app/rag/hybrid_retriever.py](../app/rag/hybrid_retriever.py)（`hybrid_search` 加 `similarity_threshold` 参数 → `get_reranker(similarity_threshold=...)`） | 新参数默认 None，不传时走 reranker 实例默认值 |
+| **query.py 主链路透传** | [app/api/v2/endpoints/query.py](../app/api/v2/endpoints/query.py)（`_do_retrieve` + `_multi_query_search` 透传 `resolved.similarity_threshold`） | 三层合并后 threshold → hybrid_search → reranker 闭环 |
+| **eval_runner 透传** | [app/rag/eval_runner.py](../app/rag/eval_runner.py)（`resolved.similarity_threshold` 传给 `hybrid_search`） | 评估任务的 retrieval_options.similarity_threshold 全链路生效 |
+| **评估对比脚本** | [scripts/eval_compare.py](../scripts/eval_compare.py)（预定义 4 组实验：baseline / thresh_0.3 / thresh_0.1 / thresh_0.0；串行跑评估 + 轮询 + 对比报告） | A.1 调优核心工具；后续 A.2/A.3 可复用 |
+| **单测** | [tests/test_v2_t11.py](../tests/test_v2_t11.py)（4 用例：eval_runner 透传 / reranker 覆盖 / reranker 回落 / get_reranker 透传） | T11 单测 34 → 38 |
+
+#### 预定义实验配置
+
+| 实验名 | 说明 | retrieval_options |
+|---|---|---|
+| `baseline` | 无 Reranker（参照组） | reranker_enable=false |
+| `rerank_thresh_0.3` | 当前默认阈值 | reranker_enable=true, similarity_threshold=0.3 |
+| `rerank_thresh_0.1` | 降低阈值 | reranker_enable=true, similarity_threshold=0.1 |
+| `rerank_thresh_0.0` | 不过滤，纯精排 | reranker_enable=true, similarity_threshold=0.0 |
+
+#### 关键设计决策
+
+1. **`similarity_threshold=None` 表示"不覆盖"**：传 None 时 reranker 用 settings 全局值；传 0.0 时显式设"不过滤"。区分两种语义（"不指定"vs"设为 0"）
+2. **不新增 Settings 字段**：threshold 覆盖是运行时行为（评估实验），不需要持久化到 .env。`resolve_options` 三层合并已支持 API 层 `options.similarity_threshold` 透传
+3. **`get_reranker()` 每次创建新实例**：工厂函数每次调都 new 实例，使得不同请求可以用不同 threshold。当前无性能瓶颈（reranker 实例轻量，核心开销在 HTTP 调用）
+4. **eval_compare.py 走 HTTP API 而非直接 import**：避免对 worker 进程的网络依赖（worker 在独立进程）；同时复用了完整评估链路（Celery + DB + Milvus），结果更可信
+
+#### 验证状态
+
+- ✅ A.1 单测 **4/4 通过**（similarity_threshold 透传全链路）
+- ✅ V2 全套单测 **309/309 通过**（零回归）
+- ⬜ 集成验证：起 worker + 跑 `python scripts/eval_compare.py --kb-id <UUID> --eval-set eval_set_smoke.json`
 
 ---
 

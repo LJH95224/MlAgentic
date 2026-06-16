@@ -20,6 +20,8 @@ SUCCESS = 0
 PARAM_INVALID = 40001  # 请求参数校验失败（缺字段 / 类型错 / 超长 / 取值越界）
 IMMUTABLE_FIELD = 40002  # 尝试修改 embedding_dim 等不可变字段（PRD KB-04）
 QUERY_REWRITE_INVALID = 40011  # query_rewrite 枚举值非法（PRD §1127 / V2.0 HRE-01）
+EVAL_DATASET_EMPTY = 40012  # 评估集为空（V2.0 EVA-01，PRD §805）
+EVAL_DATASET_TOO_LARGE = 40013  # 评估集超出 EVAL_MAX_QUESTIONS 上限（V2.0 EVA-01）
 
 # 404 — 资源不存在
 NOT_FOUND = 40400  # Session / KnowledgeBase / File 不存在
@@ -47,6 +49,8 @@ DEFAULT_MESSAGES: dict[int, str] = {
     PARAM_INVALID: "请求参数校验失败",
     IMMUTABLE_FIELD: "字段不可修改，须删除后重建",
     QUERY_REWRITE_INVALID: "query_rewrite 参数值不在枚举范围内",
+    EVAL_DATASET_EMPTY: "评估集为空",
+    EVAL_DATASET_TOO_LARGE: "评估集题数超出上限",
     NOT_FOUND: "资源不存在",
     NAME_CONFLICT: "名称已存在",
     FILE_TOO_LARGE: "文件大小超出限制",
@@ -62,6 +66,8 @@ __all__ = [
     "PARAM_INVALID",
     "IMMUTABLE_FIELD",
     "QUERY_REWRITE_INVALID",
+    "EVAL_DATASET_EMPTY",
+    "EVAL_DATASET_TOO_LARGE",
     "NOT_FOUND",
     "NAME_CONFLICT",
     "FILE_TOO_LARGE",

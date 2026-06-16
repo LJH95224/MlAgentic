@@ -79,6 +79,7 @@ async def hybrid_search(
     document_id: str | None = None,
     entity_tags: list[str] | None = None,
     reranker_enable: bool = True,
+    similarity_threshold: float | None = None,
 ) -> list[HybridSearchResult]:
     """V2.0 混合检索：稠密向量 + BM25 + RRF 融合。
 
@@ -89,6 +90,8 @@ async def hybrid_search(
         document_id: 限定到具体文档
         entity_tags: 限定召回的切片必须包含其中任一实体标签
         reranker_enable: 是否启用 Reranker 精排；False 时跳过精排步骤
+        similarity_threshold: 运行时覆盖 Reranker 过滤阈值；
+            不传则用 reranker 实例的默认值（settings.reranker_similarity_threshold）
 
     Returns:
         HybridSearchResult 列表，按融合分数降序
@@ -210,7 +213,7 @@ async def hybrid_search(
         )
         return merged
 
-    reranker = get_reranker()
+    reranker = get_reranker(similarity_threshold=similarity_threshold)
     reranker_chunks = [
         {
             "content": r.content,
