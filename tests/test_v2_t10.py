@@ -178,8 +178,12 @@ class TestRetrieveEndpoint:
 
     @pytest.fixture
     def _patch_hybrid_search(self):
-        """Mock hybrid_search 返回预设结果。"""
-        from app.rag import hybrid_retriever
+        """Mock hybrid_search 返回预设结果。
+
+        注意：必须 patch 端点模块的局部名 retrieve.hybrid_search，
+        而非 hybrid_retriever.hybrid_search，因为端点用 from ... import
+        直接绑定了模块级名称。
+        """
         from app.rag.hybrid_retriever import HybridSearchResult
 
         fake_results = [
@@ -208,7 +212,7 @@ class TestRetrieveEndpoint:
             ),
         ]
 
-        with patch.object(hybrid_retriever, "hybrid_search", new_callable=AsyncMock) as mock:
+        with patch("app.api.v2.endpoints.retrieve.hybrid_search", new_callable=AsyncMock) as mock:
             mock.return_value = fake_results
             yield mock
 
@@ -452,3 +456,99 @@ class TestGenerateEndpoint:
         from app.api.v2.router import router
         paths = [r.path for r in router.routes]
         assert any("/generate" in p for p in paths), f"/generate 不在路由中: {paths}"
+
+
+# ──────────────── E2E 集成测试 ────────────────
+
+
+class TestT10E2E:
+    """T10 三个子接口端到端集成。"""
+
+    @pytest.mark.asyncio
+    async def test_retrieve_e2e(self):
+        """Retrieve: 检索 → 返回 chunks + 分数字段。"""
+        from app.api.v2.endpoints.retrieve import v2_retrieve
+        from app.schemas.v2.retrieve import RetrieveRequest
+        from app.rag.hybrid_retriever import HybridSearchResult
+
+        with patch("app.api.v2.endpoints.retrieve.hybrid_search", new_callable=AsyncMock) as mock:
+            mock.return_value = [
+                HybridSearchResult(
+                    chunk_id=10, content="测试内容", document_id="d1",
+                    score=0.92, heading_path=["标题1"], block_type="paragraph",
+                    page_number=1, metadata={"filename": "test.pdf"},
+                    source_collection="kb_test",
+                ),
+            ]
+            body = RetrieveRequest(query="测试", kb_ids=[uuid.uuid4()], top_k=3)
+            resp = await v2_retrieve(body, db=MagicMock())
+            assert len(resp.chunks) == 1
+            assert resp.chunks[0].rerank_score == 0.92
+            assert resp.chunks[0].document_name == "test.pdf"
+
+    @pytest.mark.asyncio
+    async def test_rerank_e2e(self):
+        """Rerank: query + candidates → 降序排列。"""
+        from app.api.v2.endpoints.rerank import v2_rerank
+        from app.schemas.v2.rerank import RerankRequest
+        from app.rag.reranker import RerankResult
+
+        with patch("app.api.v2.endpoints.rerank.get_reranker") as mock_factory:
+            mock_reranker = AsyncMock()
+            mock_reranker.rerank.return_value = [
+                RerankResult(index=1, relevance_score=0.90, content="B"),
+                RerankResult(index=0, relevance_score=0.70, content="A"),
+            ]
+            mock_factory.return_value = mock_reranker
+
+            body = RerankRequest(
+                query="测试",
+                candidates=[
+                    {"id": "a", "text": "A内容"},
+                    {"id": "b", "text": "B内容"},
+                ],
+                top_n=2,
+            )
+            resp = await v2_rerank(body)
+            assert resp.results[0].id == "b"
+            assert resp.results[0].rerank_score == 0.90
+
+    @pytest.mark.asyncio
+    async def test_generate_e2e(self):
+        """Generate: context → LLM → citation + confidence。"""
+        from app.api.v2.endpoints.generate import v2_generate
+        from app.schemas.v2.generate import GenerateRequest, ContextChunk
+
+        with patch("app.api.v2.endpoints.generate._generate_answer", new_callable=AsyncMock) as mock_gen:
+            mock_gen.return_value = "违约金为合同总额20%[1]。"
+            body = GenerateRequest(
+                query="违约金是多少？",
+                context_chunks=[
+                    ContextChunk(
+                        chunk_id="c1",
+                        content="违约金为合同总额的20%",
+                        source_label="合同.pdf P3",
+                    ),
+                ],
+            )
+            resp = await v2_generate(body, db=MagicMock())
+            assert "违约金" in resp.answer
+            assert resp.confidence is not None
+
+    @pytest.mark.asyncio
+    async def test_generate_no_citation_e2e(self):
+        """Generate: 关闭 citation 时 context 不含 [N] 标记。"""
+        from app.api.v2.endpoints.generate import v2_generate
+        from app.schemas.v2.generate import GenerateRequest, ContextChunk, GenerateOptions
+
+        with patch("app.api.v2.endpoints.generate._generate_answer", new_callable=AsyncMock) as mock_gen:
+            mock_gen.return_value = "答案文本。"
+            body = GenerateRequest(
+                query="测试",
+                context_chunks=[
+                    ContextChunk(chunk_id="c1", content="内容1", source_label="文档1"),
+                ],
+                options=GenerateOptions(enable_citation=False),
+            )
+            resp = await v2_generate(body, db=MagicMock())
+            assert resp.source_citations == []
