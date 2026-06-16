@@ -422,6 +422,18 @@ class StructuredBlock:
 
 ---
 
+### ✅ T12 完成 · 2026-06-16
+
+- **QueryAnalytics 快照表**：[app/models/query_analytics.py](../app/models/query_analytics.py) 14 字段（trace_id / session_id / kb_id / total_latency_ms / confidence / low_confidence / graph_rag_triggered / bm25_contributed / faithfulness_check_triggered / total_tokens / react_steps / has_error / created_at）；工具使用 bool + AVG = 触发率
+- **analytics_writer**：[app/observability/analytics_writer.py](../app/observability/analytics_writer.py) `build_analytics_snapshot` 纯函数从 Tracer.steps 提取指标 + `write_analytics_snapshot` 异步写入（只 flush 不 commit）
+- **/v2/query 集成**：[app/api/v2/endpoints/query.py](../app/api/v2/endpoints/query.py) 正常出口 + 检索空兜底出口各调用一次 `write_analytics_snapshot`；在 Tracer 上下文内写入，失败仅 warning
+- **GET /analytics**：[app/api/v2/endpoints/analytics.py](../app/api/v2/endpoints/analytics.py) `GET /api/v2/analytics`；单次 SQL 聚合 10 指标；支持 start_date / end_date / kb_id 过滤；默认 7 天
+- **Schema**：[app/schemas/v2/analytics.py](../app/schemas/v2/analytics.py) ToolUsageStats / TokenConsumptionStats / AnalyticsResponse
+- **单测**：14 个新用例（[tests/test_v2_t12.py](../tests/test_v2_t12.py)）—— ORM 3 + Schema 3 + writer 4 + query 集成 2 + analytics 端点 3
+- **回归**：V2 全套测试 343 → **357 passed**（T12 净增 14，零回归）
+
+---
+
 ### ✅ T11 完成 · 2026-06-16
 
 - **EVA-01 创建评估**：[app/api/v2/endpoints/evaluations.py](../app/api/v2/endpoints/evaluations.py) `POST /api/v2/knowledge-bases/{kb_id}/evaluate`；校验 KB + 评估集（空→40012 / 超 100 题→40013）；写 EvalTask 行 → `run_evaluation_task.delay(eval_id)` → 立即返 eval_task_id；Celery 不可达映射 50300

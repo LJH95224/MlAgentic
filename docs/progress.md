@@ -64,7 +64,7 @@
 | T9 | CHC-03/04（置信度 + 答案自检） | P2 | P2 | ✅ 完成 + 单测验收 | 2026-06-15 |
 | T10 | UQA-02/03/04（分层子接口） | P3 | P3 | ✅ 完成 + 单测验收 | 2026-06-16 |
 | T11 | EVA-01/02/03（RAGAS 评估） | P3 | P3 | ✅ 完成 + 单测验收 | 2026-06-16 |
-| T12 | OBS-03（聚合统计） | P4 | P4 | ⬜ 待开始 | — |
+| T12 | OBS-03（聚合统计） | P4 | P4 | ✅ 完成 + 单测验收 | 2026-06-16 |
 
 ### 已确认的关键决策
 
@@ -416,6 +416,37 @@
 - ✅ T10 单测 **34/34 通过**（错误码 + Schema + 端点 + E2E）
 - ✅ V2 全套单测 **343/343 通过**（零回归；T0~T11 + P1 + T10）
 - ⬜ 集成测试：起 uvicorn → 分别 POST /v2/retrieve /v2/generate /v2/rerank 验三个端点可用
+
+### T12 · 聚合统计 ✅（2026-06-16）
+
+#### 交付内容
+
+| 子任务 | 实现位置 | 备注 |
+|---|---|---|
+| **T12.1 QueryAnalytics 模型** | [app/models/query_analytics.py](../app/models/query_analytics.py)（14 字段：trace_id / session_id / kb_id / total_latency_ms / confidence / low_confidence / graph_rag_triggered / bm25_contributed / faithfulness_check_triggered / total_tokens / react_steps / has_error / created_at） | 快照表，每次查询写一行 |
+| **T12.1 模型注册** | [app/models/__init__.py](../app/models/__init__.py)（新增 QueryAnalytics） | lifespan create_all 自动建表 |
+| **T12.2 Analytics Schema** | [app/schemas/v2/analytics.py](../app/schemas/v2/analytics.py)（ToolUsageStats / TokenConsumptionStats / AnalyticsResponse） | 7 个核心指标 + 时间范围 |
+| **T12.3 快照写入辅助** | [app/observability/analytics_writer.py](../app/observability/analytics_writer.py)（`build_analytics_snapshot` 纯函数 + `write_analytics_snapshot` 异步写入） | 从 Tracer.steps 提取工具使用 bool / Token 数 / 步骤数 / 错误 |
+| **T12.4 /v2/query 集成** | [app/api/v2/endpoints/query.py](../app/api/v2/endpoints/query.py)（正常出口 + 检索空兜底出口各调用一次 write_analytics_snapshot） | 在 Tracer 上下文内写入，失败仅 warning 不阻断 |
+| **T12.5 GET /analytics 端点** | [app/api/v2/endpoints/analytics.py](../app/api/v2/endpoints/analytics.py) `GET /api/v2/analytics` | 单次 SQL 聚合查询；支持 start_date / end_date / kb_id 过滤 |
+| **T12.6 V2 Router 扩展** | [app/api/v2/router.py](../app/api/v2/router.py)（追加 analytics 路由） | 与 V2 现有路由并存 |
+| **T12.7 单测** | [tests/test_v2_t12.py](../tests/test_v2_t12.py)（14 用例） | ORM 模型 3 + Schema 3 + analytics_writer 4 + query 集成 2 + analytics 端点 3 |
+
+#### 关键设计决策
+
+1. **快照表而非实时聚合 agent_traces**：agent_traces 的 step_input/step_output 是 JSONB，从中聚合 confidence / tool_usage 性能差且复杂。新增 query_analytics 快照表，每次查询写一行扁平指标，SQL 聚合简单高效
+2. **工具使用率用 bool + AVG**：`AVG(graph_rag_triggered)` = 触发率，无需存 JSONB。PRD 要求的 `tool_usage` 各字段为查询占比 [0, 1]，bool 列 + AVG 天然满足
+3. **low_confidence 冗余 bool 列**：避免聚合时每行做 `confidence < 0.5` 浮点比较；`AVG(CASE WHEN low_confidence THEN 1.0 ELSE 0.0 END)` 直接算占比
+4. **Token 简化为 total_tokens**：Tracer 只记录 token_count 总数，不区分 input/output。PRD 的 token_consumption.total_input / total_output 简化为 total_tokens，减少字段复杂度
+5. **写入在 Tracer 上下文内**：需要访问 `tracer.trace_id` 和 `tracer.steps`，所以两个出口点（正常 + 检索空）的快照写入都在 `async with Tracer(...) as tracer:` 块内
+6. **单次 SQL 聚合**：analytics 端点用一个 SELECT 语句完成所有 10 个聚合指标（COUNT / AVG / SUM / CASE WHEN），响应 < 500ms
+7. **默认 7 天时间范围**：start_date 默认 end_date - 7 天，覆盖最近一周数据
+
+#### 验证状态
+
+- ✅ T12 单测 **14/14 通过**（ORM + Schema + Writer + Query 集成 + Analytics 端点）
+- ✅ V2 全套单测 **357/357 通过**（零回归；T0~T12 + P1）
+- ⬜ 集成测试：起 uvicorn → 多次 POST /v2/query → GET /api/v2/analytics 验聚合指标
 
 ### Bugfix · V2 query 超时卡死修复 ✅（2026-06-16）
 
