@@ -272,3 +272,75 @@ class TestRetrieveEndpoint:
         from app.api.v2.router import router
         paths = [r.path for r in router.routes]
         assert any("/retrieve" in p for p in paths), f"/retrieve 不在路由中: {paths}"
+
+
+# ──────────────── UQA-04 Rerank 端点 ────────────────
+
+
+class TestRerankEndpoint:
+    """UQA-04 POST /api/v2/rerank 端点测试。"""
+
+    @pytest.mark.asyncio
+    async def test_rerank_returns_sorted(self):
+        """Rerank 返回按 rerank_score 降序的结果。"""
+        from app.api.v2.endpoints.rerank import v2_rerank
+        from app.schemas.v2.rerank import RerankRequest
+
+        fake_rerank_results = [
+            MagicMock(index=2, relevance_score=0.95),
+            MagicMock(index=0, relevance_score=0.80),
+        ]
+
+        with patch("app.api.v2.endpoints.rerank.get_reranker") as mock_factory:
+            mock_reranker = AsyncMock()
+            mock_reranker.rerank.return_value = fake_rerank_results
+            mock_factory.return_value = mock_reranker
+
+            body = RerankRequest(
+                query="违约金条款",
+                candidates=[
+                    {"id": "doc_1", "text": "第三条 违约责任..."},
+                    {"id": "doc_2", "text": "交货地址：北京市..."},
+                    {"id": "doc_3", "text": "违约金按合同总额20%计算..."},
+                ],
+                top_n=2,
+            )
+            resp = await v2_rerank(body)
+            assert len(resp.results) == 2
+            assert resp.results[0].rerank_score >= resp.results[1].rerank_score
+            # 验证 id 映射正确
+            assert resp.results[0].id == "doc_3"
+            assert resp.results[1].id == "doc_1"
+
+    @pytest.mark.asyncio
+    async def test_rerank_empty_candidates_fails(self):
+        """candidates 为空时 Pydantic 校验拒绝。"""
+        from app.schemas.v2.rerank import RerankRequest
+        with pytest.raises(Exception):
+            RerankRequest(query="测试", candidates=[])
+
+    @pytest.mark.asyncio
+    async def test_rerank_fallback_on_failure(self):
+        """Reranker 调用失败时降级返回原顺序。"""
+        from app.api.v2.endpoints.rerank import v2_rerank
+        from app.schemas.v2.rerank import RerankRequest
+
+        with patch("app.api.v2.endpoints.rerank.get_reranker") as mock_factory:
+            mock_reranker = AsyncMock()
+            mock_reranker.rerank.side_effect = Exception("API 不可达")
+            mock_factory.return_value = mock_reranker
+
+            body = RerankRequest(
+                query="测试",
+                candidates=[{"id": "1", "text": "内容A"}, {"id": "2", "text": "内容B"}],
+                top_n=2,
+            )
+            resp = await v2_rerank(body)
+            # 降级时仍返回结果，保持原顺序
+            assert len(resp.results) == 2
+
+    def test_rerank_router_registered(self):
+        """验证 /rerank 路由已注册。"""
+        from app.api.v2.router import router
+        paths = [r.path for r in router.routes]
+        assert any("/rerank" in p for p in paths), f"/rerank 不在路由中: {paths}"

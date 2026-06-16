@@ -6,7 +6,7 @@ V1.5 的 /api/v1/ 完全不动，V2 在独立前缀下并存。
 
 from fastapi import APIRouter
 
-from app.api.v2.endpoints import evaluations, query, retrieve, traces
+from app.api.v2.endpoints import evaluations, query, rerank, retrieve, traces
 
 router = APIRouter(prefix="/api/v2")
 
@@ -16,3 +16,4 @@ router.include_router(query.router)
 router.include_router(evaluations.create_router)
 router.include_router(evaluations.router)
 router.include_router(retrieve.router)
+router.include_router(rerank.router)
