@@ -24,6 +24,7 @@ from app.agent.context import reset_current_kb_ids, set_current_kb_ids
 from app.core.config import get_settings
 from app.models.knowledge_base import KnowledgeBase
 from app.observability.tracer import Tracer
+from app.observability.analytics_writer import write_analytics_snapshot
 from app.rag.citation import (
     build_context_with_citation,
     build_citation_system_prompt,
@@ -196,6 +197,22 @@ async def _v2_query_inner(
             empty_faith_status = (
                 "skipped" if resolved.enable_faithfulness_check else "disabled"
             )
+
+            # 写聚合统计快照（OBS-03）—— 检索空场景
+            try:
+                await write_analytics_snapshot(
+                    db=db,
+                    trace_id=tracer.trace_id,
+                    session_id=body.session_id,
+                    kb_id=body.kb_ids[0] if body.kb_ids else None,
+                    total_latency_ms=int((time.perf_counter() - start_time) * 1000),
+                    confidence=empty_score.confidence,
+                    enable_faithfulness_check=resolved.enable_faithfulness_check,
+                    steps=tracer.steps,
+                )
+            except Exception as e:
+                logger.warning("Analytics 快照写入失败: %s", e)
+
             return QueryResponse(
                 answer="抱歉，未检索到相关内容。请尝试更换关键词或放宽搜索范围。",
                 source_citations=[],
@@ -253,6 +270,21 @@ async def _v2_query_inner(
             top_k=resolved.top_k,
             hallucination_penalty=faith_result.hallucination_penalty,
         )
+
+        # 写聚合统计快照（OBS-03）
+        try:
+            await write_analytics_snapshot(
+                db=db,
+                trace_id=tracer.trace_id,
+                session_id=body.session_id,
+                kb_id=body.kb_ids[0] if body.kb_ids else None,
+                total_latency_ms=int((time.perf_counter() - start_time) * 1000),
+                confidence=score.confidence,
+                enable_faithfulness_check=resolved.enable_faithfulness_check,
+                steps=tracer.steps,
+            )
+        except Exception as e:
+            logger.warning("Analytics 快照写入失败: %s", e)
 
     total_latency_ms = int((time.perf_counter() - start_time) * 1000)
 

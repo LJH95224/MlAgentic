@@ -166,3 +166,131 @@ class TestAnalyticsWriter:
         assert snap["graph_rag_triggered"] is False
         assert snap["has_error"] is False
         assert snap["low_confidence"] is True  # 0.0 < 0.5
+
+
+# ──────────────── /v2/query 集成 ────────────────
+
+
+class TestQueryAnalyticsIntegration:
+    """验证 /v2/query 末尾正确调用 write_analytics_snapshot。"""
+
+    @pytest.mark.asyncio
+    async def test_query_writes_analytics_on_success(self):
+        """正常查询完成后写一行 analytics 快照。"""
+        from app.api.v2.endpoints.query import v2_query
+        from app.schemas.v2.query import QueryRequest
+
+        mock_db = AsyncMock()
+        mock_db.get = AsyncMock(return_value=None)
+
+        with patch("app.api.v2.endpoints.query.hybrid_search", new_callable=AsyncMock) as mock_search, \
+             patch("app.api.v2.endpoints.query.generate_answer", new_callable=AsyncMock) as mock_gen, \
+             patch("app.api.v2.endpoints.query.write_analytics_snapshot", new_callable=AsyncMock) as mock_write:
+
+            mock_search.return_value = [
+                MagicMock(chunk_id=1, content="内容", document_id="d1", score=0.9,
+                          entity_tags=[], heading_path=[], block_type="paragraph",
+                          page_number=1, metadata={}, source_collection="kb"),
+            ]
+            mock_gen.return_value = "答案[1]。"
+
+            body = QueryRequest(query="测试", kb_ids=[uuid.uuid4()])
+            resp = await v2_query(body=body, db=mock_db)
+            mock_write.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_query_writes_analytics_on_empty_results(self):
+        """检索为空兜底分支也写 analytics 快照。"""
+        from app.api.v2.endpoints.query import v2_query
+        from app.schemas.v2.query import QueryRequest
+
+        mock_db = AsyncMock()
+        mock_db.get = AsyncMock(return_value=None)
+
+        with patch("app.api.v2.endpoints.query.hybrid_search", new_callable=AsyncMock) as mock_search, \
+             patch("app.api.v2.endpoints.query.write_analytics_snapshot", new_callable=AsyncMock) as mock_write:
+
+            mock_search.return_value = []
+
+            body = QueryRequest(query="不存在的查询", kb_ids=[uuid.uuid4()])
+            resp = await v2_query(body=body, db=mock_db)
+            mock_write.assert_called_once()
+            # 检索空场景 confidence=0.0
+            call_kwargs = mock_write.call_args[1]
+            assert call_kwargs["confidence"] == 0.0
+
+
+# ──────────────── Analytics 端点 ────────────────
+
+
+class TestAnalyticsEndpoint:
+    """OBS-03 GET /api/v2/analytics 端点测试。"""
+
+    @pytest.mark.asyncio
+    async def test_analytics_returns_stats(self):
+        """正常返回聚合统计数据。"""
+        from app.api.v2.endpoints.analytics import v2_analytics
+
+        mock_db = MagicMock()
+        mock_row = MagicMock()
+        mock_row.total_queries = 100
+        mock_row.avg_latency_ms = 2500.0
+        mock_row.avg_confidence = 0.78
+        mock_row.low_confidence_rate = 0.12
+        mock_row.graph_rag_triggered_rate = 0.65
+        mock_row.bm25_contributed_rate = 0.43
+        mock_row.faithfulness_check_rate = 0.28
+        mock_row.total_tokens = 500000
+        mock_row.avg_react_steps = 3.2
+        mock_row.error_rate = 0.02
+
+        mock_result = MagicMock()
+        mock_result.first.return_value = mock_row
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        resp = await v2_analytics(
+            start_date=date(2026, 6, 9),
+            end_date=date(2026, 6, 16),
+            kb_id=None,
+            db=mock_db,
+        )
+        assert resp.total_queries == 100
+        assert resp.avg_latency_ms == 2500.0
+        assert resp.tool_usage.graph_rag_triggered == 0.65
+
+    @pytest.mark.asyncio
+    async def test_analytics_empty_data(self):
+        """无数据时返回零值默认。"""
+        from app.api.v2.endpoints.analytics import v2_analytics
+
+        mock_db = MagicMock()
+        mock_row = MagicMock()
+        mock_row.total_queries = 0
+        mock_row.avg_latency_ms = None
+        mock_row.avg_confidence = None
+        mock_row.low_confidence_rate = 0.0
+        mock_row.graph_rag_triggered_rate = 0.0
+        mock_row.bm25_contributed_rate = 0.0
+        mock_row.faithfulness_check_rate = 0.0
+        mock_row.total_tokens = 0
+        mock_row.avg_react_steps = None
+        mock_row.error_rate = 0.0
+
+        mock_result = MagicMock()
+        mock_result.first.return_value = mock_row
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        resp = await v2_analytics(
+            start_date=date(2026, 6, 9),
+            end_date=date(2026, 6, 16),
+            kb_id=None,
+            db=mock_db,
+        )
+        assert resp.total_queries == 0
+        assert resp.avg_latency_ms is None
+
+    def test_analytics_router_registered(self):
+        """验证 /analytics 路由已注册。"""
+        from app.api.v2.router import router
+        paths = [r.path for r in router.routes]
+        assert any("/analytics" in p for p in paths), f"/analytics 不在路由中: {paths}"

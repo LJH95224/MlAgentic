@@ -6,12 +6,14 @@ V1.5 的 /api/v1/ 完全不动，V2 在独立前缀下并存。
 
 from fastapi import APIRouter
 
-from app.api.v2.endpoints import evaluations, generate, query, rerank, retrieve, traces
+from app.api.v2.endpoints import analytics, evaluations, generate, query, rerank, retrieve, traces
 
 router = APIRouter(prefix="/api/v2")
 
 router.include_router(traces.router)
 router.include_router(query.router)
+# T12 OBS-03 聚合统计
+router.include_router(analytics.router)
 # T11 RAGAS 评估：两个 router（PRD 路径 POST /evaluate + GET /evaluations[/{id}]）
 router.include_router(evaluations.create_router)
 router.include_router(evaluations.router)
