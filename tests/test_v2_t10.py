@@ -168,3 +168,107 @@ class TestRerankSchema:
         from app.schemas.v2.rerank import RerankCandidate
         with pytest.raises(Exception):
             RerankCandidate(id="1", text="")
+
+
+# ──────────────── UQA-02 Retrieve 端点 ────────────────
+
+
+class TestRetrieveEndpoint:
+    """UQA-02 POST /api/v2/retrieve 端点测试。"""
+
+    @pytest.fixture
+    def _patch_hybrid_search(self):
+        """Mock hybrid_search 返回预设结果。"""
+        from app.rag import hybrid_retriever
+        from app.rag.hybrid_retriever import HybridSearchResult
+
+        fake_results = [
+            HybridSearchResult(
+                chunk_id=1,
+                content="违约金为合同总额的20%",
+                document_id="doc_001",
+                score=0.94,
+                entity_tags=["违约金"],
+                heading_path=["第三条 违约责任"],
+                block_type="paragraph",
+                page_number=3,
+                metadata={"filename": "采购合同_2024.pdf"},
+                source_collection="kb_test",
+            ),
+            HybridSearchResult(
+                chunk_id=2,
+                content="交货地址：北京市朝阳区",
+                document_id="doc_001",
+                score=0.45,
+                heading_path=["第五条 交货"],
+                block_type="paragraph",
+                page_number=5,
+                metadata={"filename": "采购合同_2024.pdf"},
+                source_collection="kb_test",
+            ),
+        ]
+
+        with patch.object(hybrid_retriever, "hybrid_search", new_callable=AsyncMock) as mock:
+            mock.return_value = fake_results
+            yield mock
+
+    @pytest.mark.asyncio
+    async def test_retrieve_returns_chunks(self, _patch_hybrid_search):
+        """检索返回 chunk 列表 + 分数字段。"""
+        from app.api.v2.endpoints.retrieve import v2_retrieve
+        from app.schemas.v2.retrieve import RetrieveRequest
+
+        body = RetrieveRequest(query="违约金条款", kb_ids=[uuid.uuid4()])
+        resp = await v2_retrieve(body=body, db=MagicMock())
+        assert len(resp.chunks) == 2
+        assert resp.chunks[0].rerank_score is not None
+        assert resp.total_retrieved == 2
+
+    @pytest.mark.asyncio
+    async def test_retrieve_no_kb_ids(self, _patch_hybrid_search):
+        """kb_ids 为 None 时也能检索（走默认 collection）。"""
+        from app.api.v2.endpoints.retrieve import v2_retrieve
+        from app.schemas.v2.retrieve import RetrieveRequest
+
+        body = RetrieveRequest(query="测试查询")
+        resp = await v2_retrieve(body=body, db=MagicMock())
+        assert resp.chunks is not None
+
+    @pytest.mark.asyncio
+    async def test_retrieve_empty_results(self):
+        """检索无结果时返回空列表。"""
+        from app.api.v2.endpoints.retrieve import v2_retrieve
+        from app.schemas.v2.retrieve import RetrieveRequest
+
+        with patch("app.api.v2.endpoints.retrieve.hybrid_search", new_callable=AsyncMock) as mock:
+            mock.return_value = []
+            body = RetrieveRequest(query="不存在的查询", kb_ids=[uuid.uuid4()])
+            resp = await v2_retrieve(body=body, db=MagicMock())
+            assert resp.chunks == []
+            assert resp.total_retrieved == 0
+            assert resp.after_rerank == 0
+
+    @pytest.mark.asyncio
+    async def test_retrieve_with_graph_rag(self, _patch_hybrid_search):
+        """启用 Graph RAG 时先跑 NER + 锚定再检索。"""
+        from app.api.v2.endpoints.retrieve import v2_retrieve
+        from app.schemas.v2.retrieve import RetrieveRequest
+
+        body = RetrieveRequest(
+            query="违约金条款",
+            kb_ids=[uuid.uuid4()],
+            enable_graph_rag=True,
+        )
+        with patch("app.api.v2.endpoints.retrieve.extract_query_entities", new_callable=AsyncMock) as ner_mock, \
+             patch("app.api.v2.endpoints.retrieve.anchor_to_graph", new_callable=AsyncMock) as anchor_mock:
+            ner_mock.return_value = [{"name": "违约金", "type": "LEGAL_TERM"}]
+            anchor_mock.return_value = ["违约金"]
+            resp = await v2_retrieve(body=body, db=MagicMock())
+            ner_mock.assert_called_once()
+            anchor_mock.assert_called_once()
+
+    def test_retrieve_router_registered(self):
+        """验证 /retrieve 路由已注册到 V2 router。"""
+        from app.api.v2.router import router
+        paths = [r.path for r in router.routes]
+        assert any("/retrieve" in p for p in paths), f"/retrieve 不在路由中: {paths}"
