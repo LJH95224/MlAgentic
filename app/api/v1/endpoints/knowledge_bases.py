@@ -113,19 +113,22 @@ async def update_knowledge_base(
     body: KnowledgeBaseUpdateRequest,
     db: DBSessionDep,
 ) -> ApiResponse[KnowledgeBaseDetail]:
-    """更新知识库 name / description（KB-04）。
+    """更新知识库 name / description / retrieval_config（KB-04 + V2.0 HRE-06）。
 
     PRD 明确：embedding_dim / chunk_size / chunk_overlap 创建后只读；
     传入会被 Schema 层 extra="forbid" 拦截 → 422。
     """
-    # 用 model_fields_set 区分 "未传 description" vs "显式传 description=None（清空）"
+    # 用 model_fields_set 区分 "未传字段" vs "显式传 None（清空）"
     description_was_set = "description" in body.model_fields_set
+    retrieval_config_was_set = "retrieval_config" in body.model_fields_set
     kb = await kb_service.update_kb(
         db,
         kb_id,
         name=body.name,
         description=body.description,
         description_was_set=description_was_set,
+        retrieval_config=body.retrieval_config,
+        retrieval_config_was_set=retrieval_config_was_set,
     )
     logger.info("知识库已更新: id=%s name=%r", kb.id, kb.name)
     # 更新接口不重新查 Neo4j 计数（额外开销不值），返回 0 占位；

@@ -141,7 +141,8 @@ class TestHybridSearch:
              patch("app.rag.hybrid_retriever.get_milvus_client") as mock_client_fn, \
              patch("app.rag.hybrid_retriever.get_current_role", return_value="ALL"), \
              patch("app.rag.hybrid_retriever.get_current_kb_ids", return_value=[uuid.uuid4()]), \
-             patch("app.rag.hybrid_retriever.aembed_texts", new_callable=AsyncMock) as mock_embed:
+             patch("app.rag.hybrid_retriever.aembed_texts", new_callable=AsyncMock) as mock_embed, \
+             patch("app.rag.hybrid_retriever.get_reranker") as mock_reranker:
 
             settings = MagicMock()
             settings.bm25_enable = True
@@ -166,11 +167,17 @@ class TestHybridSearch:
             ]
             mock_client_fn.return_value = mock_client
 
+            # mock reranker：NoopReranker 给 score=1.0
+            from app.rag.reranker import NoopReranker
+            mock_reranker.return_value = NoopReranker()
+
             results = await hybrid_search("台风", top_k=5)
 
             assert len(results) == 1
             assert results[0].content == "台风"
-            assert results[0].score == 0.95
+            # 注：T4 后默认 NoopReranker 会把 score 覆盖为 1.0（"信任原排序、满分"语义）
+            # 检索原始 distance=0.95 由 hybrid_search 调用透传到 reranker 之前
+            assert results[0].score == 1.0
             assert mock_client.hybrid_search.called
 
     @pytest.mark.asyncio
@@ -182,7 +189,8 @@ class TestHybridSearch:
              patch("app.rag.hybrid_retriever.get_milvus_client") as mock_client_fn, \
              patch("app.rag.hybrid_retriever.get_current_role", return_value="ALL"), \
              patch("app.rag.hybrid_retriever.get_current_kb_ids", return_value=[uuid.uuid4()]), \
-             patch("app.rag.hybrid_retriever.aembed_texts", new_callable=AsyncMock) as mock_embed:
+             patch("app.rag.hybrid_retriever.aembed_texts", new_callable=AsyncMock) as mock_embed, \
+             patch("app.rag.hybrid_retriever.get_reranker") as mock_reranker:
 
             settings = MagicMock()
             settings.bm25_enable = False
@@ -203,6 +211,9 @@ class TestHybridSearch:
                 }}]
             ]
             mock_client_fn.return_value = mock_client
+
+            from app.rag.reranker import NoopReranker
+            mock_reranker.return_value = NoopReranker()
 
             results = await hybrid_search("降雨", top_k=5)
 
@@ -236,7 +247,8 @@ class TestHybridSearch:
              patch("app.rag.hybrid_retriever.get_milvus_client") as mock_client_fn, \
              patch("app.rag.hybrid_retriever.get_current_role", return_value="ALL"), \
              patch("app.rag.hybrid_retriever.get_current_kb_ids", return_value=[uuid.uuid4()]), \
-             patch("app.rag.hybrid_retriever.aembed_texts", new_callable=AsyncMock) as mock_embed:
+             patch("app.rag.hybrid_retriever.aembed_texts", new_callable=AsyncMock) as mock_embed, \
+             patch("app.rag.hybrid_retriever.get_reranker") as mock_reranker:
 
             settings = MagicMock()
             settings.bm25_enable = True
@@ -260,6 +272,9 @@ class TestHybridSearch:
                 }}]
             ]
             mock_client_fn.return_value = mock_client
+
+            from app.rag.reranker import NoopReranker
+            mock_reranker.return_value = NoopReranker()
 
             results = await hybrid_search("测试", top_k=5)
 

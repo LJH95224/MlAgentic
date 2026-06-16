@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 
@@ -77,6 +78,7 @@ async def hybrid_search(
     doc_type: str | None = None,
     document_id: str | None = None,
     entity_tags: list[str] | None = None,
+    reranker_enable: bool = True,
 ) -> list[HybridSearchResult]:
     """V2.0 混合检索：稠密向量 + BM25 + RRF 融合。
 
@@ -86,6 +88,7 @@ async def hybrid_search(
         doc_type: 按文档类型过滤
         document_id: 限定到具体文档
         entity_tags: 限定召回的切片必须包含其中任一实体标签
+        reranker_enable: 是否启用 Reranker 精排；False 时跳过精排步骤
 
     Returns:
         HybridSearchResult 列表，按融合分数降序
@@ -148,7 +151,9 @@ async def hybrid_search(
             continue
 
         try:
-            results = _search_single_collection(
+            # MilvusClient 是同步 gRPC 调用，用 to_thread 避免阻塞事件循环
+            results = await asyncio.to_thread(
+                _search_single_collection,
                 client=client,
                 collection=collection,
                 query_text=query,
@@ -168,7 +173,8 @@ async def hybrid_search(
             )
             # 降级：纯向量检索
             try:
-                results = _fallback_dense_search(
+                results = await asyncio.to_thread(
+                    _fallback_dense_search,
                     client=client,
                     collection=collection,
                     query_vec=query_vec,
@@ -195,6 +201,15 @@ async def hybrid_search(
     )
 
     # ── Reranker 精排（HRE-05） ──
+    # reranker_enable=False 时跳过精排，直接返回原排序结果
+    if not reranker_enable:
+        # 不做精排，直接截断到 top_k 返回
+        merged = all_results[:top_k]
+        logger.info(
+            "hybrid_search: reranker 已禁用，直接返回 %d 条", len(merged),
+        )
+        return merged
+
     reranker = get_reranker()
     reranker_chunks = [
         {
@@ -265,20 +280,22 @@ def _search_single_collection(
         )
 
         # hybrid_search + RRF 融合
+        # 注：pymilvus 3.0.0 把 `rerank=` 参数重命名为 `ranker=`
         raw_results = client.hybrid_search(
             collection_name=collection,
             reqs=[dense_req, sparse_req],
-            rerank=RRFRanker(k=rrf_k),
+            ranker=RRFRanker(k=rrf_k),
             limit=top_k,
             output_fields=output_fields,
         )
     else:
         # ── BM25 禁用时退化为纯向量检索 ──
+        # 注：pymilvus 3.0.0 把 `param=` 参数重命名为 `search_params=`
         raw_results = client.search(
             collection_name=collection,
             data=[query_vec],
             anns_field="vector",
-            param={"metric_type": "COSINE", "params": {"ef": 64}},
+            search_params={"metric_type": "COSINE", "params": {"ef": 64}},
             limit=top_k,
             expr=filter_expr,
             output_fields=output_fields,
@@ -301,7 +318,7 @@ def _fallback_dense_search(
         collection_name=collection,
         data=[query_vec],
         anns_field="vector",
-        param={"metric_type": "COSINE", "params": {"ef": 64}},
+        search_params={"metric_type": "COSINE", "params": {"ef": 64}},
         limit=top_k,
         expr=filter_expr,
         output_fields=output_fields,

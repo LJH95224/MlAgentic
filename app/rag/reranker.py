@@ -2,12 +2,16 @@
 
 核心类：
 - BaseReranker：抽象基类
-- LiteLLMReranker：通过 LiteLLM 走在线 Reranker API（推荐起步）
+- SiliconFlowReranker：直接调 SiliconFlow rerank API（Cohere 兼容格式）
+- LiteLLMReranker：通过 LiteLLM 走在线 Reranker API（保留供 Jina/Cohere 等兼容场景）
 - NoopReranker：开发期跳过（reranker_type=none）
 
 设计要点：
 - reranker_type=none 时走 NoopReranker，零开销
-- LiteLLMReranker 失败时降级返回原顺序（HRE-05 降级策略）
+- SiliconFlowReranker：绕过 litellm.arerank（不支持 SiliconFlow rerank 路由），
+  直接用 httpx 调 /v1/rerank 端点（Cohere 兼容格式）
+- LiteLLMReranker：保留给 Jina/Cohere 等原生支持的 provider
+- Reranker 失败时降级返回原顺序（HRE-05 降级策略）
 - 过滤分数 < similarity_threshold 的低相关 chunk
 - 过滤后剩余 < 3 时保留 top-3 不截断（PRD 兜底规则）
 - 并发控制：API 调用加 Semaphore 限制
@@ -26,8 +30,9 @@ import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
+import httpx
+
 from app.core.config import get_settings
-import litellm
 
 logger = logging.getLogger(__name__)
 
@@ -106,14 +111,19 @@ class NoopReranker(BaseReranker):
         return results
 
 
-# ──────────────── LiteLLMReranker ────────────────
+# ──────────────── SiliconFlowReranker ────────────────
 
 
-class LiteLLMReranker(BaseReranker):
-    """通过 LiteLLM 走在线 Reranker API。
+class SiliconFlowReranker(BaseReranker):
+    """直接调 SiliconFlow rerank API（Cohere 兼容格式）。
 
-    优先 SiliconFlow BAAI/bge-reranker-v2-m3。
-    失败时降级返回原顺序（HRE-05 降级策略）。
+    绕过 litellm.arerank，因为 LiteLLM 的 rerank 模块不支持 SiliconFlow 路由
+    （SiliconFlow 的 /v1/rerank 端点走 Cohere 兼容协议，但 LiteLLM 不认
+    SiliconFlow 作为 rerank provider）。
+
+    直接用 httpx 调 /v1/rerank，请求/响应格式：
+    - 请求：POST {api_base}/rerank, body={model, query, documents, top_n}
+    - 响应：{results: [{index, relevance_score}, ...]}
     """
 
     # 并发控制：避免 API 限流
@@ -123,8 +133,10 @@ class LiteLLMReranker(BaseReranker):
         settings = get_settings()
         self.model = settings.reranker_model or "BAAI/bge-reranker-v2-m3"
         self.api_key = settings.reranker_api_key
-        self.api_base = settings.reranker_api_base
+        # api_base 形如 https://api.siliconflow.cn/v1，rerank 端点为 /rerank
+        self.api_base = (settings.reranker_api_base or "").rstrip("/")
         self.similarity_threshold = settings.reranker_similarity_threshold
+        self.timeout = settings.litellm_timeout  # 复用 LLM 超时
 
     async def rerank(
         self,
@@ -140,7 +152,7 @@ class LiteLLMReranker(BaseReranker):
                 logger.warning(
                     "Reranker 调用失败（降级返回原顺序）: %s", e
                 )
-                return self._fallback(chunks, top_k)
+                return _fallback(chunks, top_k)
 
     async def _do_rerank(
         self,
@@ -148,24 +160,41 @@ class LiteLLMReranker(BaseReranker):
         chunks: list[dict],
         top_k: int,
     ) -> list[RerankResult]:
-        """调用 LiteLLM rerank API。"""
+        """直接调 SiliconFlow /v1/rerank API（Cohere 兼容格式）。"""
         documents = [chunk.get("content", "") for chunk in chunks]
 
-        # LiteLLM rerank API（兼容 Cohere / Jina / SiliconFlow 等格式）
-        response = await litellm.arerank(
-            model=self.model,
-            query=query,
-            documents=documents,
-            top_n=min(top_k, len(documents)),
-            api_key=self.api_key,
-            api_base=self.api_base,
-        )
+        # 构造请求 URL：api_base 末尾是 /v1，rerank 端点为 /rerank
+        url = f"{self.api_base}/rerank"
+
+        payload = {
+            "model": self.model,
+            "query": query,
+            "documents": documents,
+            "top_n": min(top_k, len(documents)),
+            "return_documents": False,
+        }
+
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            resp = await client.post(url, json=payload, headers=headers)
+
+        if resp.status_code != 200:
+            raise RuntimeError(
+                f"Reranker API 返回非 200: status={resp.status_code} body={resp.text[:200]}"
+            )
+
+        data = resp.json()
+        raw_results = data.get("results", [])
 
         # 解析响应
         results = []
-        for item in response.results:
-            idx = item.index
-            score = item.relevance_score
+        for item in raw_results:
+            idx = item.get("index", 0)
+            score = item.get("relevance_score", 0.0)
 
             # 过滤低分 chunk
             if score < self.similarity_threshold:
@@ -192,7 +221,6 @@ class LiteLLMReranker(BaseReranker):
                 "Reranker 过滤后仅剩 %d 条（< 3），保留 top-3",
                 len(results),
             )
-            # 补充到 3 条
             existing_indices = {r.index for r in results}
             for i, chunk in enumerate(chunks):
                 if i in existing_indices:
@@ -217,15 +245,78 @@ class LiteLLMReranker(BaseReranker):
         results.sort(key=lambda r: r.relevance_score, reverse=True)
         return results[:top_k]
 
-    @staticmethod
-    def _fallback(chunks: list[dict], top_k: int) -> list[RerankResult]:
-        """降级：返回原顺序结果。"""
+
+# ──────────────── LiteLLMReranker（保留供 Jina/Cohere 场景） ────────────────
+
+
+class LiteLLMReranker(BaseReranker):
+    """通过 LiteLLM 走在线 Reranker API。
+
+    适用于 Jina / Cohere 等 LiteLLM 原生支持的 rerank provider。
+    SiliconFlow 场景请用 SiliconFlowReranker。
+    失败时降级返回原顺序（HRE-05 降级策略）。
+    """
+
+    # 并发控制：避免 API 限流
+    _semaphore = asyncio.Semaphore(5)
+
+    def __init__(self):
+        settings = get_settings()
+        self.model = settings.reranker_model or "BAAI/bge-reranker-v2-m3"
+        self.api_key = settings.reranker_api_key
+        self.api_base = settings.reranker_api_base
+        self.similarity_threshold = settings.reranker_similarity_threshold
+        self.timeout = settings.litellm_timeout
+
+    async def rerank(
+        self,
+        query: str,
+        chunks: list[dict],
+        top_k: int = 5,
+    ) -> list[RerankResult]:
+        async with self._semaphore:
+            try:
+                return await self._do_rerank(query, chunks, top_k)
+            except Exception as e:
+                logger.warning(
+                    "Reranker 调用失败（降级返回原顺序）: %s", e
+                )
+                return _fallback(chunks, top_k)
+
+    async def _do_rerank(
+        self,
+        query: str,
+        chunks: list[dict],
+        top_k: int,
+    ) -> list[RerankResult]:
+        """调用 LiteLLM rerank API。"""
+        import litellm
+
+        documents = [chunk.get("content", "") for chunk in chunks]
+
+        response = await litellm.arerank(
+            model=self.model,
+            query=query,
+            documents=documents,
+            top_n=min(top_k, len(documents)),
+            api_key=self.api_key,
+            api_base=self.api_base,
+            timeout=self.timeout,
+        )
+
         results = []
-        for i, chunk in enumerate(chunks[:top_k]):
+        for item in response.results:
+            idx = item.index
+            score = item.relevance_score
+
+            if score < self.similarity_threshold:
+                continue
+
+            chunk = chunks[idx] if idx < len(chunks) else {}
             results.append(
                 RerankResult(
-                    index=i,
-                    relevance_score=0.0,  # 降级标记
+                    index=idx,
+                    relevance_score=score,
                     content=chunk.get("content", ""),
                     document_id=chunk.get("document_id", ""),
                     heading_path=chunk.get("heading_path"),
@@ -235,18 +326,79 @@ class LiteLLMReranker(BaseReranker):
                     metadata=chunk.get("metadata"),
                 )
             )
-        return results
+
+        # PRD 兜底规则：过滤后剩余 < 3 时保留 top-3 不截断
+        if len(results) < 3 and len(chunks) > 0:
+            logger.info(
+                "Reranker 过滤后仅剩 %d 条（< 3），保留 top-3",
+                len(results),
+            )
+            existing_indices = {r.index for r in results}
+            for i, chunk in enumerate(chunks):
+                if i in existing_indices:
+                    continue
+                if len(results) >= 3:
+                    break
+                results.append(
+                    RerankResult(
+                        index=i,
+                        relevance_score=0.0,
+                        content=chunk.get("content", ""),
+                        document_id=chunk.get("document_id", ""),
+                        heading_path=chunk.get("heading_path"),
+                        block_type=chunk.get("block_type", ""),
+                        page_number=chunk.get("page_number"),
+                        entity_tags=chunk.get("entity_tags"),
+                        metadata=chunk.get("metadata"),
+                    )
+                )
+
+        results.sort(key=lambda r: r.relevance_score, reverse=True)
+        return results[:top_k]
+
+
+# ──────────────── 通用降级函数 ────────────────
+
+
+def _fallback(chunks: list[dict], top_k: int) -> list[RerankResult]:
+    """降级：返回原顺序结果。"""
+    results = []
+    for i, chunk in enumerate(chunks[:top_k]):
+        results.append(
+            RerankResult(
+                index=i,
+                relevance_score=0.0,  # 降级标记
+                content=chunk.get("content", ""),
+                document_id=chunk.get("document_id", ""),
+                heading_path=chunk.get("heading_path"),
+                block_type=chunk.get("block_type", ""),
+                page_number=chunk.get("page_number"),
+                entity_tags=chunk.get("entity_tags"),
+                metadata=chunk.get("metadata"),
+            )
+        )
+    return results
 
 
 # ──────────────── 工厂函数 ────────────────
 
 
 def get_reranker() -> BaseReranker:
-    """根据配置创建 Reranker 实例。"""
+    """根据配置创建 Reranker 实例。
+
+    - reranker_type=none → NoopReranker
+    - reranker_type=api + api_base 含 siliconflow → SiliconFlowReranker
+    - reranker_type=api + 其他 → LiteLLMReranker（Jina/Cohere 等）
+    """
     settings = get_settings()
     reranker_type = (settings.reranker_type or "none").lower()
 
     if reranker_type == "api":
+        api_base = settings.reranker_api_base or ""
+        # SiliconFlow 走专用 Reranker（绕过 litellm.arerank 不支持的问题）
+        if "siliconflow" in api_base.lower():
+            return SiliconFlowReranker()
+        # 其他 provider（Jina / Cohere 等）走 LiteLLM 原生路由
         return LiteLLMReranker()
     else:
         return NoopReranker()
@@ -254,6 +406,7 @@ def get_reranker() -> BaseReranker:
 
 __all__ = [
     "BaseReranker",
+    "SiliconFlowReranker",
     "LiteLLMReranker",
     "NoopReranker",
     "RerankResult",

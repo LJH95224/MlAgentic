@@ -97,9 +97,9 @@ class Tracer:
         elapsed = time.perf_counter() - self._start_time
         self._total_latency_ms = int(elapsed * 1000)
 
-        # 批量写入 PG
+        # 批量写入 PG（异步任务）
         try:
-            self._flush_to_db()
+            await self._flush_to_db()
         except Exception as e:
             # trace 写入失败不应影响业务主链路
             logger.warning("Trace 写入 PG 失败（已忽略）: %s", e)
@@ -158,14 +158,14 @@ class Tracer:
             record.step_latency_ms = int(elapsed * 1000)
             self.steps.append(record)
 
-    def _flush_to_db(self) -> None:
-        """批量写入 agent_traces 表（同步）。
+    async def _flush_to_db(self) -> None:
+        """批量写入 agent_traces 表（异步）。
 
-        V2 阶段简化为同步写入；T12 阶段优化为异步。
-        使用独立短连接，避免与业务层共享 session。
+        V2 阶段简化为同步语义（trace 结束时一次性写）；T12 阶段优化为后台 fire-and-forget。
+        通过 AsyncSessionLocal 走与业务层一致的 asyncpg 引擎，避免引入 psycopg2 同步驱动依赖。
         """
         from sqlalchemy import insert
-        from app.db.session import engine as _engine
+        from app.db.session import AsyncSessionLocal
         from app.models.agent_trace import AgentTrace
 
         if not self.steps:
@@ -188,12 +188,9 @@ class Tracer:
                 "error_message": s.error_message,
             })
 
-        # 同步写入（run_sync 在 async context 外不可用，直接用 sync session）
-        import sqlalchemy
-
-        with sqlalchemy.create_engine(str(_engine.url).replace("+asyncpg", "")).connect() as conn:
-            conn.execute(insert(AgentTrace), rows)
-            conn.commit()
+        async with AsyncSessionLocal() as session:
+            await session.execute(insert(AgentTrace), rows)
+            await session.commit()
 
         logger.debug("Trace 写入 PG: trace_id=%s rows=%d", self.trace_id, len(rows))
 

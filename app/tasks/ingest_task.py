@@ -28,6 +28,7 @@ V1.5 七步管道已归档为 ingest_task_v1.py，V2.0 全面替换。
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import hashlib
 import logging
 import traceback
@@ -38,8 +39,11 @@ from typing import TYPE_CHECKING
 from sqlalchemy import select, update
 
 from app.core.config import get_settings
+from app.ingest.doc_metadata import DocMetadata, extract_doc_metadata
+from app.ingest.dual_layer import CoarseChunk, generate_coarse_chunks
 from app.ingest.parser import ParseError, StructuredBlock, parse_document_structured
 from app.ingest.structured_splitter import StructuredChunk, split_structured_blocks
+from app.ingest.table_description import TableDescription, generate_table_descriptions
 from app.kg.writer import (
     bulk_link_entities_to_chunk,
     bulk_upsert_entities,
@@ -222,31 +226,141 @@ def _step_split_structured(
     return chunks
 
 
-def _step_table_description_noop(chunks: list[StructuredChunk]) -> None:
-    """Step 4: 表格描述生成（IDP-03，T7 接通；当前 noop）。
+async def _step_table_description(
+    fine_chunks: list[StructuredChunk],
+    *,
+    document_id: str,
+) -> list[StructuredChunk]:
+    """Step 4: 表格描述生成（IDP-03）。
 
-    T7 阶段会为 table 类型 chunk 生成自然语言描述，
-    增强表格内容的可检索性。当前阶段跳过。
+    对每张 ``block_type=="table"`` 的 chunk 生成自然语言描述，作为额外
+    ``StructuredChunk`` 返回（block_type="table_description"，
+    parent_chunk_id 指向原表格 chunk 的 INT64 chunk_id 字符串）。
+
+    新 chunk 的 ``index`` 从 ``len(fine_chunks)`` 起递增，与细粒度 chunk
+    的 chunk_id 不冲突，幂等 upsert 仍稳定。
     """
-    pass
+    descriptions = await generate_table_descriptions(fine_chunks)
+    if not descriptions:
+        return []
+
+    td_chunks: list[StructuredChunk] = []
+    base_index = len(fine_chunks)
+    for offset, desc in enumerate(descriptions):
+        parent = fine_chunks[desc.parent_index]
+        parent_chunk_id_int = _make_chunk_id_int(document_id, parent.index)
+        td_chunks.append(
+            StructuredChunk(
+                chunk_id=str(uuid.uuid4().hex),
+                index=base_index + offset,
+                content=desc.description,
+                heading_path=list(parent.heading_path),
+                block_type="table_description",
+                page_number=parent.page_number,
+                position_index=parent.position_index,
+                parent_chunk_id=str(parent_chunk_id_int),
+                is_summary=False,
+            )
+        )
+    return td_chunks
 
 
-def _step_summary_noop(chunks: list[StructuredChunk]) -> None:
-    """Step 5: 段落摘要生成（IDP-04，T7 接通；当前 noop）。
+async def _step_dual_layer_index(
+    fine_chunks: list[StructuredChunk],
+    *,
+    td_chunk_count: int,
+    document_id: str,
+) -> tuple[list[StructuredChunk], list[StructuredChunk]]:
+    """Step 5: 双层索引（IDP-04）。
 
-    T7 阶段会为每个 chunk 生成摘要，写入 parent_chunk_id + is_summary 字段，
-    实现双层索引。当前阶段跳过。
+    1. 调 :func:`generate_coarse_chunks` 按父级 heading_path 聚合 + LLM 摘要
+    2. 转换 ``CoarseChunk`` → ``StructuredChunk(is_summary=True)``，index 从
+       ``len(fine_chunks) + td_chunk_count`` 起，确保三类 chunk_id 不冲突
+    3. **回填** fine_chunks 的 ``parent_chunk_id``：把每个粗 chunk 的 INT64
+       chunk_id 字符串写到它聚合的所有 fine chunk 的 parent_chunk_id 字段
+
+    Returns:
+        ``(updated_fine_chunks, coarse_chunks)``：更新后的 fine_chunks（其中
+        被聚合的 chunk 已回填 parent_chunk_id）和新生成的粗 chunk 列表。
+        ``IDP_DUAL_INDEX_ENABLE=False`` 时返 ``(fine_chunks, [])`` 不做任何修改。
     """
-    pass
+    coarse_intermediates = await generate_coarse_chunks(fine_chunks)
+    if not coarse_intermediates:
+        return fine_chunks, []
+
+    base_index = len(fine_chunks) + td_chunk_count
+    coarse_chunks: list[StructuredChunk] = []
+
+    # 收集需要回填 parent_chunk_id 的 fine chunk 下标 → 父 chunk_id 字符串
+    parent_id_overrides: dict[int, str] = {}
+
+    for offset, ci in enumerate(coarse_intermediates):
+        coarse_idx = base_index + offset
+        coarse_chunk_id_int = _make_chunk_id_int(document_id, coarse_idx)
+        coarse_chunks.append(
+            StructuredChunk(
+                chunk_id=str(uuid.uuid4().hex),
+                index=coarse_idx,
+                content=ci.summary_text,
+                heading_path=list(ci.heading_path),
+                block_type="paragraph",
+                page_number=ci.page_number,
+                # 粗 chunk 的 position_index 取首个被聚合 fine chunk 的 position
+                position_index=fine_chunks[ci.parent_indices[0]].position_index,
+                parent_chunk_id=None,  # 粗 chunk 自身是 parent
+                is_summary=True,
+            )
+        )
+        # 回填子 chunk 的 parent_chunk_id
+        coarse_id_str = str(coarse_chunk_id_int)
+        for fine_idx in ci.parent_indices:
+            parent_id_overrides[fine_idx] = coarse_id_str
+
+    # frozen dataclass 用 dataclasses.replace 重建
+    updated_fine: list[StructuredChunk] = []
+    for i, c in enumerate(fine_chunks):
+        if i in parent_id_overrides:
+            updated_fine.append(
+                dataclasses.replace(c, parent_chunk_id=parent_id_overrides[i])
+            )
+        else:
+            updated_fine.append(c)
+
+    return updated_fine, coarse_chunks
 
 
-def _step_doc_metadata_noop(file_record: KbFile, blocks: list[StructuredBlock]) -> None:
-    """Step 6: 文档元数据提取（IDP-05，T7 接通；当前 noop）。
+async def _step_doc_metadata(
+    resources: TaskResources,
+    *,
+    file_record: KbFile,
+    blocks: list[StructuredBlock],
+) -> DocMetadata | None:
+    """Step 6: 文档元数据提取（IDP-05）。
 
-    T7 阶段会从文档中提取标题/作者/日期等元数据，
-    写入 KbFile.doc_metadata 和 KbFile.summary_brief。当前阶段跳过。
+    成功时把 ``doc_metadata`` JSONB 与 ``summary_brief`` 写入 ``kb_files`` 表；
+    失败软降级（保留两个字段为 None）。
     """
-    pass
+    meta = await extract_doc_metadata(blocks)
+    if meta is None:
+        logger.warning("IDP-05 文档元数据为空（已软失败），跳过 PG 写入 file_id=%s", file_record.id)
+        return None
+
+    async with resources.db() as session:
+        await session.execute(
+            update(KbFile)
+            .where(KbFile.id == file_record.id)
+            .values(
+                doc_metadata=meta.to_dict(),
+                summary_brief=meta.summary_brief,
+            )
+        )
+        await session.commit()
+
+    logger.info(
+        "IDP-05 文档元数据写入完成 file_id=%s doc_type=%s topics=%d",
+        file_record.id, meta.doc_type, len(meta.key_topics),
+    )
+    return meta
 
 
 async def _step_embed(chunks: list[StructuredChunk]) -> list[list[float]]:
@@ -434,31 +548,45 @@ async def _main(file_id_str: str, kb_id_str: str) -> dict:
         await _set_progress(resources, file_id, progress=PROGRESS_PARSED)
 
         # Step 3: 结构感知切片（IDP-02）
-        chunks = _step_split_structured(blocks, kb)
+        fine_chunks = _step_split_structured(blocks, kb)
         await _set_progress(resources, file_id, progress=PROGRESS_SPLIT)
 
-        # Step 4: 表格描述生成（IDP-03，noop）
-        _step_table_description_noop(chunks)
+        document_id = str(file_record.id)
+
+        # Step 4: 表格描述生成（IDP-03）—— 软失败：单张表 LLM 失败不影响其他
+        td_chunks = await _step_table_description(fine_chunks, document_id=document_id)
         await _set_progress(resources, file_id, progress=PROGRESS_TABLE_DESC)
 
-        # Step 5: 段落摘要生成（IDP-04，noop）
-        _step_summary_noop(chunks)
+        # Step 5: 双层索引（IDP-04）—— 同时回填 fine_chunks 的 parent_chunk_id
+        fine_chunks, coarse_chunks = await _step_dual_layer_index(
+            fine_chunks,
+            td_chunk_count=len(td_chunks),
+            document_id=document_id,
+        )
         await _set_progress(resources, file_id, progress=PROGRESS_SUMMARY)
 
-        # Step 6: 文档元数据提取（IDP-05，noop）
-        _step_doc_metadata_noop(file_record, blocks)
+        # Step 6: 文档元数据提取（IDP-05）—— 软失败：失败时 doc_metadata 留空
+        await _step_doc_metadata(resources, file_record=file_record, blocks=blocks)
         await _set_progress(resources, file_id, progress=PROGRESS_DOC_META)
 
-        # Step 7: 批量向量嵌入
+        # 合并三类 chunk 后续 embedding / Milvus / NER 步骤共用此列表
+        # 顺序：fine（含已回填 parent_chunk_id）→ table_description → coarse
+        chunks = fine_chunks + td_chunks + coarse_chunks
+
+        # Step 7: 批量向量嵌入（自然包含三类 chunk）
         vectors = await _step_embed(chunks)
         await _set_progress(resources, file_id, progress=PROGRESS_EMBEDDED)
         logger.info("embedding 完成 file_id=%s vectors=%d", file_id, len(vectors))
 
-        # Step 9: NER（先跑，entity_tags 在 Step 8 一并写入 Milvus）
-        chunk_entities = await _step_ner(chunks)
-        entity_count_total = sum(len(es) for es in chunk_entities)
+        # Step 9: NER —— 仅对 fine_chunks 跑（粗粒度摘要 + 表格描述都是合成文本，
+        # 不应抽出新实体）。给 td/coarse 补空 entities 列表，对齐 zip 长度。
+        chunk_entities_fine = await _step_ner(fine_chunks)
+        entity_count_total = sum(len(es) for es in chunk_entities_fine)
+        chunk_entities = (
+            chunk_entities_fine + [[] for _ in td_chunks] + [[] for _ in coarse_chunks]
+        )
 
-        # Step 8: Milvus V2 写入（携带 entity_tags + 结构元数据）
+        # Step 8: Milvus V2 写入（携带 entity_tags + 结构元数据 + parent_chunk_id + is_summary）
         _step_milvus_write_v2(
             resources,
             kb=kb,
@@ -509,6 +637,9 @@ async def _main(file_id_str: str, kb_id_str: str) -> dict:
             "file_id": file_id_str,
             "kb_id": kb_id_str,
             "chunk_count": len(chunks),
+            "fine_chunk_count": len(fine_chunks),
+            "table_description_count": len(td_chunks),
+            "coarse_chunk_count": len(coarse_chunks),
             "entity_count": written_entity_count,
             "block_types": list({c.block_type for c in chunks}),
             "status": FILE_STATUS_COMPLETED,

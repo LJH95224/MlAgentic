@@ -121,6 +121,51 @@ class Settings(BaseSettings):
     # Trace 数据保留天数（过期记录由定期清理 cron 清理，T12 阶段实现）
     trace_retention_days: int = Field(default=90, alias="TRACE_RETENTION_DAYS")
 
+    # --- Query 增强（HRE-01 / HRE-02，T8 阶段启用） ---
+    # Query 改写器使用的 LLM 模型；留空则复用 LITELLM_MODEL
+    # 想用更便宜/更快的轻量模型做 HyDE / multi_query 时，可独立指定
+    query_rewriter_model: str | None = Field(default=None, alias="QUERY_REWRITER_MODEL")
+    # 全局默认的 Query 改写策略（none / hyde / multi_query）
+    # API options.query_rewrite 与 KB.retrieval_config.query_rewrite 都未指定时生效
+    query_rewrite_default: str = Field(default="none", alias="QUERY_REWRITE_DEFAULT")
+    # Graph RAG 锚定全局开关；KB.retrieval_config.enable_graph_rag 与
+    # API options.enable_graph_rag 都可覆盖。Query 无实体或实体不在图谱时自动短路。
+    graph_rag_enable: bool = Field(default=True, alias="GRAPH_RAG_ENABLE")
+    # multi_query 策略下生成的子查询数量（不含原 query），范围 [2, 5]
+    multi_query_count: int = Field(default=3, alias="MULTI_QUERY_COUNT", ge=2, le=5)
+    # Query NER 单次 LLM 调用硬超时（秒），超时返 [] 软失败
+    query_ner_timeout_s: float = Field(default=8.0, alias="QUERY_NER_TIMEOUT_S")
+    # 图谱锚定单实体 Cypher 查询硬超时（秒），多实体并发时使用
+    graph_anchor_timeout_s: float = Field(default=5.0, alias="GRAPH_ANCHOR_TIMEOUT_S")
+
+    # --- IDP 智能文档处理（IDP-03 / IDP-04 / IDP-05，T7 阶段启用） ---
+    # 表格描述 / 段落摘要 / 文档元数据三步统一用此 LLM；留空则复用 LITELLM_MODEL
+    # （与 KG_NER_MODEL / QUERY_REWRITER_MODEL 同款解耦风格）
+    idp_llm_model: str | None = Field(default=None, alias="IDP_LLM_MODEL")
+    # 双层索引开关；False 时 Step 5 跳过粗粒度 chunk 生成（chunk_count 仅含 fine + td）
+    idp_dual_index_enable: bool = Field(default=True, alias="IDP_DUAL_INDEX_ENABLE")
+    # 单步 LLM 调用硬超时（秒）—— 表格描述 / 段落摘要 / 元数据提取统一用
+    idp_llm_timeout_s: float = Field(default=20.0, alias="IDP_LLM_TIMEOUT_S")
+    # IDP 并发限制（避免单文档触发大量 LLM 并发压垮厂商限流）
+    idp_concurrency: int = Field(default=5, alias="IDP_CONCURRENCY")
+    # 文档元数据提取时取前 N 个字符做输入（PRD §IDP-05 推荐前 3000 token，约 8000 中文）
+    idp_doc_meta_input_chars: int = Field(default=8000, alias="IDP_DOC_META_INPUT_CHARS")
+
+    # --- 答案自检（CHC-04，T9 阶段启用） ---
+    # 留空则复用 LITELLM_MODEL（与 IDP_LLM_MODEL / KG_NER_MODEL 同款解耦风格）
+    faithfulness_model: str | None = Field(default=None, alias="FAITHFULNESS_CHECK_MODEL")
+    # 答案自检全局默认开关；API options.enable_faithfulness_check / KB.retrieval_config 都可覆盖
+    # PRD §637 默认 false：高频调用不强制多一次 LLM；按需开启
+    faithfulness_check_default: bool = Field(default=False, alias="FAITHFULNESS_CHECK_DEFAULT")
+    # 自检 LLM 调用硬超时（秒）；超时软失败返 skipped 不阻断主链路
+    faithfulness_check_timeout_s: float = Field(default=8.0, alias="FAITHFULNESS_CHECK_TIMEOUT_S")
+
+    # --- V2.0 查询接口超时保护 ---
+    # /api/v2/query 整体请求硬超时（秒），覆盖所有内部步骤
+    # 包含：query_rewrite + NER + graph_anchor + hybrid_search + LLM generate + faithfulness
+    # 默认 120s：embedding(30s) + Milvus(5s) + LLM(60s) + 余量(25s)
+    query_total_timeout_s: float = Field(default=120.0, alias="QUERY_TOTAL_TIMEOUT_S")
+
     # ============================================================
     # V1.5 新增（数据管理层 · 2026-06-11 起启用）
     # ============================================================

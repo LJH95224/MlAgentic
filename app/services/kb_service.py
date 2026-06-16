@@ -22,7 +22,7 @@ from app.api import error_codes
 from app.api.exceptions import BusinessError
 from app.models.knowledge_base import KnowledgeBase
 from app.rag.milvus_client import (
-    create_kb_collection,
+    create_v2_kb_collection,
     drop_kb_collection,
 )
 
@@ -89,10 +89,12 @@ async def create_kb(
             error_codes.NAME_CONFLICT, f"知识库名称 '{name}' 已存在"
         )
 
-    # 2) 创建 Milvus Collection（同步，失败直接抛 RuntimeError）
+    # 2) 创建 V2 Milvus Collection（同步，失败直接抛 RuntimeError）
+    # V2 Schema 含 heading_path / block_type / parent_chunk_id / is_summary /
+    # sparse_vector 等 15 字段，与入库管道 _step_milvus_write_v2 对齐
     kb_id = uuid.uuid4()
     try:
-        create_kb_collection(kb_id, dim=embedding_dim)
+        create_v2_kb_collection(kb_id, dim=embedding_dim)
     except RuntimeError as e:
         logger.error("KB-01 创建 Milvus Collection 失败 kb_id=%s: %s", kb_id, e)
         raise BusinessError(
@@ -189,14 +191,22 @@ async def update_kb(
     name: str | None = None,
     description: str | None = None,
     description_was_set: bool = False,
+    retrieval_config: dict | None = None,
+    retrieval_config_was_set: bool = False,
 ) -> KnowledgeBase:
-    """更新知识库 name / description（KB-04）。
+    """更新知识库字段（KB-04 + V2.0 HRE-06）。
 
     Args:
         name: 新名称；None 表示不改
         description: 新描述；None 含义看 description_was_set
         description_was_set: True = 用户显式传了 description（可能为 None，等价"清空"）
                              False = 用户未传 description 字段（保持原值）
+        retrieval_config: V2.0 知识库级检索默认配置；含义看 retrieval_config_was_set
+        retrieval_config_was_set: True = 用户显式传了 retrieval_config，按以下规则处理：
+                                   - {} → 清空所有覆盖（写 None）
+                                   - dict 非空 → 完整覆盖（不做 deep merge，调用方自己合并）
+                                   - None → 清空（与 {} 等价）
+                                  False = 用户未传该字段（保持原值）
 
     Raises:
         BusinessError(NAME_CONFLICT): 新 name 已被其它 KB 占用
@@ -214,6 +224,10 @@ async def update_kb(
 
     if description_was_set:
         kb.description = description
+
+    if retrieval_config_was_set:
+        # 空 dict 或 None 都视为清空覆盖；非空 dict 直接整体写入
+        kb.retrieval_config = retrieval_config if retrieval_config else None
 
     try:
         await db.commit()

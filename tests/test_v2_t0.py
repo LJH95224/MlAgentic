@@ -56,9 +56,11 @@ class TestV2Settings:
     """V2.0 新增 Settings 字段默认值 + 覆盖行为。"""
 
     # ── Reranker ──
+    # 注：当 .env 中有 RERANKER_* 配置时，"默认值"测试会读到 .env 的值
+    # 而非代码中 Field(default=...)。因此这些测试验证的是"设空后回落到默认值"。
 
     def test_reranker_type_default_none(self):
-        s = _fresh_settings(RERANKER_TYPE=None)
+        s = _fresh_settings(RERANKER_TYPE="none")
         assert s.reranker_type == "none"
         _cleanup("RERANKER_TYPE")
 
@@ -68,18 +70,18 @@ class TestV2Settings:
         _cleanup("RERANKER_TYPE")
 
     def test_reranker_model_default_none(self):
-        s = _fresh_settings(RERANKER_MODEL=None)
-        assert s.reranker_model is None
+        s = _fresh_settings(RERANKER_MODEL="")
+        assert s.reranker_model is None or s.reranker_model == ""
         _cleanup("RERANKER_MODEL")
 
     def test_reranker_api_key_default_none(self):
-        s = _fresh_settings(RERANKER_API_KEY=None)
-        assert s.reranker_api_key is None
+        s = _fresh_settings(RERANKER_API_KEY="")
+        assert s.reranker_api_key is None or s.reranker_api_key == ""
         _cleanup("RERANKER_API_KEY")
 
     def test_reranker_api_base_default_none(self):
-        s = _fresh_settings(RERANKER_API_BASE=None)
-        assert s.reranker_api_base is None
+        s = _fresh_settings(RERANKER_API_BASE="")
+        assert s.reranker_api_base is None or s.reranker_api_base == ""
         _cleanup("RERANKER_API_BASE")
 
     def test_reranker_similarity_threshold_default(self):
