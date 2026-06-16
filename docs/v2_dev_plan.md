@@ -409,6 +409,19 @@ class StructuredBlock:
 
 ---
 
+### ✅ T10 完成 · 2026-06-16
+
+- **UQA-02 纯检索**：[app/api/v2/endpoints/retrieve.py](../app/api/v2/endpoints/retrieve.py) `POST /api/v2/retrieve`；只调 hybrid_search 不调 LLM；支持 Graph RAG / BM25 / Rerank 开关；返回 chunks 含 4 个分数字段（vector_score / bm25_score / rrf_score / rerank_score）
+- **UQA-03 纯生成**：[app/api/v2/endpoints/generate.py](../app/api/v2/endpoints/generate.py) `POST /api/v2/generate`；接受自定义 context_chunks；跳过检索直接调 LLM + Citation + 自检 + 置信度；不触发 Milvus / Neo4j
+- **UQA-04 独立精排**：[app/api/v2/endpoints/rerank.py](../app/api/v2/endpoints/rerank.py) `POST /api/v2/rerank`；query + candidates → rerank_score 降序；降级返回原顺序
+- **Schema**：[app/schemas/v2/retrieve.py](../app/schemas/v2/retrieve.py) + [generate.py](../app/schemas/v2/generate.py) + [rerank.py](../app/schemas/v2/rerank.py)；RetrieveChunkItem 含 4 分数字段；ContextChunk 含 source_label；RerankCandidate 含 id + text
+- **错误码**：42201 CONTEXT_CHUNKS_EMPTY 注册到 [error_codes.py](../app/api/error_codes.py) + [exceptions.py](../app/api/exceptions.py) HTTP 422
+- **Router**：[app/api/v2/router.py](../app/api/v2/router.py) 追加 retrieve / generate / rerank 三个路由
+- **单测**：34 个新用例（[tests/test_v2_t10.py](../tests/test_v2_t10.py)）—— 错误码 3 + Schema 12 + Retrieve 端点 5 + Rerank 端点 4 + Generate 端点 6 + E2E 4
+- **回归**：V2 全套测试 309 → **343 passed**（T10 净增 34，零回归）
+
+---
+
 ### ✅ T11 完成 · 2026-06-16
 
 - **EVA-01 创建评估**：[app/api/v2/endpoints/evaluations.py](../app/api/v2/endpoints/evaluations.py) `POST /api/v2/knowledge-bases/{kb_id}/evaluate`；校验 KB + 评估集（空→40012 / 超 100 题→40013）；写 EvalTask 行 → `run_evaluation_task.delay(eval_id)` → 立即返 eval_task_id；Celery 不可达映射 50300

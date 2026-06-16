@@ -62,7 +62,7 @@
 | T7 | IDP-03/04/05（表格描述 + 双层索引 + 文档元数据） | P2 | P2 | ✅ 完成 + 单测验收 | 2026-06-15 |
 | T8 | HRE-01/02/06（Query 改写 + NER + 配置项） | P2 | P2 | ✅ 完成 + 单测验收 | 2026-06-15 |
 | T9 | CHC-03/04（置信度 + 答案自检） | P2 | P2 | ✅ 完成 + 单测验收 | 2026-06-15 |
-| T10 | UQA-02/03/04（分层子接口） | P3 | P3 | ⬜ 待开始 | — |
+| T10 | UQA-02/03/04（分层子接口） | P3 | P3 | ✅ 完成 + 单测验收 | 2026-06-16 |
 | T11 | EVA-01/02/03（RAGAS 评估） | P3 | P3 | ✅ 完成 + 单测验收 | 2026-06-16 |
 | T12 | OBS-03（聚合统计） | P4 | P4 | ⬜ 待开始 | — |
 
@@ -384,6 +384,38 @@
 | T9 CHC-03/04 | ✅ | 2026-06-15 |
 
 剩余 T10/T11/T12 都属 P3+ 增强项。
+
+### T10 · 分层子接口 ✅（2026-06-16）
+
+#### 交付内容
+
+| 子任务 | 实现位置 | 备注 |
+|---|---|---|
+| **T10.1 错误码 42201** | [app/api/error_codes.py](../app/api/error_codes.py) `CONTEXT_CHUNKS_EMPTY = 42201` + [app/api/exceptions.py](../app/api/exceptions.py) HTTP 422 映射 | PRD §1129：/v2/generate 接口 context_chunks 为空 |
+| **T10.2 UQA-02 Retrieve Schema** | [app/schemas/v2/retrieve.py](../app/schemas/v2/retrieve.py)（RetrieveRequest / RetrieveChunkItem / RetrieveResponse） | 4 个分数字段（vector_score / bm25_score / rrf_score / rerank_score） |
+| **T10.3 UQA-03 Generate Schema** | [app/schemas/v2/generate.py](../app/schemas/v2/generate.py)（ContextChunk / GenerateOptions / GenerateRequest / GenerateResponse） | context_chunks 至少 1 条；复用 CitationItem |
+| **T10.4 UQA-04 Rerank Schema** | [app/schemas/v2/rerank.py](../app/schemas/v2/rerank.py)（RerankCandidate / RerankRequest / RerankResultItem / RerankResponse） | candidates 至少 1 条；按 rerank_score 降序 |
+| **T10.5 UQA-02 纯检索端点** | [app/api/v2/endpoints/retrieve.py](../app/api/v2/endpoints/retrieve.py) `POST /api/v2/retrieve` | 只调 hybrid_search 不调 LLM；支持 Graph RAG / BM25 / Rerank 开关 |
+| **T10.6 UQA-04 独立精排端点** | [app/api/v2/endpoints/rerank.py](../app/api/v2/endpoints/rerank.py) `POST /api/v2/rerank` | query + candidates → rerank_score 降序；降级返回原顺序 |
+| **T10.7 UQA-03 纯生成端点** | [app/api/v2/endpoints/generate.py](../app/api/v2/endpoints/generate.py) `POST /api/v2/generate` | 自定义 context → LLM + Citation + 自检 + 置信度；不触发 Milvus / Neo4j |
+| **T10.8 V2 Router 扩展** | [app/api/v2/router.py](../app/api/v2/router.py)（追加 retrieve / generate / rerank 三个路由） | 与 V2 现有 traces / query / evaluations 并存 |
+| **T10.9 单测** | [tests/test_v2_t10.py](../tests/test_v2_t10.py)（34 用例） | 错误码 3 + Retrieve Schema 4 + Generate Schema 4 + Rerank Schema 4 + Retrieve 端点 5 + Rerank 端点 4 + Generate 端点 6 + E2E 4 |
+
+#### 关键设计决策
+
+1. **三个子接口完全独立端点 + Schema**：每个子接口有独立的请求/响应 Schema，不复用 /v2/query 的 QueryRequest/QueryResponse，因为语义差异大（Retrieve 不需要 LLM 参数，Generate 需要 context_chunks 而非 kb_ids，Rerank 需要 candidates）
+2. **Retrieve 端点不调 LLM**：只走 hybrid_search 链路（含 Graph RAG / BM25 / Rerank），延迟目标 < 1s
+3. **Generate 端点不触发检索**：context 由开发者传入，不 import hybrid_search / NER 等检索模块；自有 `_generate_answer` 函数支持 `enable_citation_prompt` 开关
+4. **Generate 的 ContextChunk.source_label 映射到 document_name**：citation 模块用 `document_name` 作为来源标签；Generate 端点将 `source_label or chunk_id` 映射过去，保证 Citation 解析正确
+5. **Rerank 端点的 index → id 映射**：reranker 返回的是候选列表中的 index（0-based），需要映射回 RerankCandidate.id（字符串标识）
+6. **Rerank 降级策略**：reranker 调用失败时返回原顺序候选（分数标 0.0），与 hybrid_retriever 的降级策略一致
+7. **Retrieve 的 mock 路径必须用端点模块级名称**：`patch("app.api.v2.endpoints.retrieve.hybrid_search")` 而非 `patch.object(hybrid_retriever, "hybrid_search")`，因为端点用 `from ... import` 绑定了模块级名称
+
+#### 验证状态
+
+- ✅ T10 单测 **34/34 通过**（错误码 + Schema + 端点 + E2E）
+- ✅ V2 全套单测 **343/343 通过**（零回归；T0~T11 + P1 + T10）
+- ⬜ 集成测试：起 uvicorn → 分别 POST /v2/retrieve /v2/generate /v2/rerank 验三个端点可用
 
 ### Bugfix · V2 query 超时卡死修复 ✅（2026-06-16）
 
