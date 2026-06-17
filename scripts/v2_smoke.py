@@ -462,6 +462,54 @@ async def run(args) -> None:
             gen_resp.get("faithfulness_check"),
         )
 
+        # ──────── 9) T12 /api/v2/analytics 聚合统计（OBS-03） ────────
+        logger.info("[9] T12 OBS-03 /api/v2/analytics 聚合统计")
+        # 限定 kb_id 防止历史数据干扰；smoke 已发 3-4 次 /v2/query 写入快照
+        r = await client.get(
+            "/api/v2/analytics",
+            params={"kb_id": kb_id},
+        )
+        analytics = _ensure(r)
+        for k in (
+            "total_queries", "avg_latency_ms", "avg_confidence",
+            "low_confidence_rate", "tool_usage", "token_consumption",
+            "error_rate",
+        ):
+            assert k in analytics, f"[9] /analytics 响应缺字段 {k}"
+
+        # 至少应能统计到 5a/5b/5c 这 3 次（5d 受 --skip-faithfulness 影响）
+        expected_min = 3 if args.skip_faithfulness else 4
+        assert analytics["total_queries"] >= expected_min, (
+            f"[9] total_queries={analytics['total_queries']} 应 >= {expected_min}"
+        )
+        logger.info(
+            "  ✓ total_queries=%d avg_latency_ms=%.0f avg_confidence=%.3f "
+            "low_confidence_rate=%.3f error_rate=%.3f",
+            analytics["total_queries"],
+            analytics.get("avg_latency_ms") or 0,
+            analytics.get("avg_confidence") or 0,
+            analytics["low_confidence_rate"],
+            analytics["error_rate"],
+        )
+
+        tool_usage = analytics["tool_usage"]
+        assert "graph_rag_triggered" in tool_usage
+        assert "bm25_contributed" in tool_usage
+        assert "faithfulness_check_triggered" in tool_usage
+        logger.info(
+            "  ✓ tool_usage: graph_rag=%.3f bm25=%.3f faithfulness=%.3f",
+            tool_usage["graph_rag_triggered"],
+            tool_usage["bm25_contributed"],
+            tool_usage["faithfulness_check_triggered"],
+        )
+
+        token = analytics["token_consumption"]
+        assert "total_tokens" in token
+        logger.info("  ✓ token_consumption.total_tokens=%d", token["total_tokens"])
+
+        # error_rate 必须在 [0, 1]；smoke 期望 0
+        assert 0.0 <= analytics["error_rate"] <= 1.0, "[9] error_rate 越界"
+
         # ──────── 7) 清理 ────────
         if not args.skip_cleanup:
             logger.info("[7] 清理 KB（Milvus + PG + Neo4j 三联）")
