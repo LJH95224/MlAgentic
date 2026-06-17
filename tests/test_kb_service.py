@@ -45,10 +45,13 @@ def _make_db_mock(*, name_exists: bool = False):
 
 @pytest.fixture
 def patched_milvus(monkeypatch):
-    """同时 mock create_kb_collection / drop_kb_collection（覆盖 _safe_rollback_milvus）。"""
+    """同时 mock create_v2_kb_collection / drop_kb_collection（覆盖 _safe_rollback_milvus）。
+
+    V2.0 起 KB 创建走 create_v2_kb_collection（V2 Schema，含 sparse_vector + heading_path 等）。
+    """
     create_mock = MagicMock(return_value="kb_test_collection")
     drop_mock = MagicMock(return_value=True)
-    monkeypatch.setattr(kb_service, "create_kb_collection", create_mock)
+    monkeypatch.setattr(kb_service, "create_v2_kb_collection", create_mock)
     monkeypatch.setattr(kb_service, "drop_kb_collection", drop_mock)
     yield create_mock, drop_mock
 
