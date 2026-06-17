@@ -1,7 +1,8 @@
 # TyAgent V2.0 (Hermes) 开发拆分计划
 
-> 起始日期：**2026-06-12** · 配套 PRD：[TyAgent V2.0 · 需求规格说明书](TyAgent%20V2.0%20%C2%B7%20%E9%9C%80%E6%B1%82%E8%A7%84%E6%A0%BC%E8%AF%B4%E6%98%8E%E4%B9%A6.md)
-> **当前状态：** 待开干（V1.5 全链路 smoke 已通过 2026-06-11，作为 V2.0 的底座）
+> 起始日期：**2026-06-12** · 收尾日期：**2026-06-17** · 配套 PRD：[TyAgent V2.0 · 需求规格说明书](TyAgent%20V2.0%20%C2%B7%20%E9%9C%80%E6%B1%82%E8%A7%84%E6%A0%BC%E8%AF%B4%E6%98%8E%E4%B9%A6.md)
+> **当前状态：** ✅ 全部完成（T0~T12 单测 + 集成验收 全部通过；详见 [progress.md](progress.md)）
+> **配套文档**：[architecture.md V2.0 章节](architecture.md#第三部分--v20-hermes-增量) · [v2_api_reference.md](v2_api_reference.md) · [v2_frontend_guide.md](v2_frontend_guide.md)
 >
 > 本文件是 V2.0 的"施工蓝图"：按 PRD §8 优先级链拆成最小可交付单元，标注依赖、技术要点、验收方式与人/机分工，避免反复回溯需求。
 >
@@ -25,21 +26,21 @@ P0 全部完成前，**不**开 P1；P1 全部完成前，**不**开演示。这
 
 V2.0 拆为 13 个阶段（T0~T12），P0 必须、P1 推荐、P2 加分、P3 可选：
 
-| 阶段 | 子需求 | 优先级 | 工程量 | 依赖 |
-|---|---|---|---|---|
-| **T0** | 基础设施扩展（升级 Milvus / 加 BM25 / 加 trace 表 / 加 eval 表） | P0 前置 | 中 | 无 |
-| **T1** | IDP-01/02/06（结构感知解析 + 切片 + 入库管道重构） | P0 | 大 | T0 |
-| **T2** | HRE-03/04（BM25 + RRF 融合） | P0 | 中 | T1 |
-| **T3** | OBS-01/02（Trace 采集 + 查询接口） | P0 | 中 | T0 |
-| **T4** | HRE-05（Reranker 精排，在线 API） | P1 | 中 | T2 |
-| **T5** | CHC-01/02（Citation 注入 + 解析） | P1 | 中 | T4 |
-| **T6** | UQA-01（统一查询接口 /v2/query） | P1 | 中 | T5 + T3 |
-| **T7** | IDP-03/04/05（表格描述 + 双层索引 + 文档元数据） | P2 | 大 | T1 |
-| **T8** | HRE-01/02/06（Query 改写 + Query NER + 配置项） | P2 | 中 | T6 |
-| **T9** | CHC-03/04（置信度 + 答案自检） | P2 | 中 | T5 |
-| **T10** | UQA-02/03/04（分层子接口 retrieve/generate/rerank） | P3 | 中 | T6 |
-| **T11** | EVA-01/02/03（RAGAS 评估） | P3 | 中 | T6 |
-| **T12** | OBS-03（聚合统计） | P4 | 小 | T3 + 数据 |
+| 阶段 | 子需求 | 优先级 | 工程量 | 依赖 | 完成日期 |
+|---|---|---|---|---|---|
+| **T0** | 基础设施扩展（升级 Milvus / 加 BM25 / 加 trace 表 / 加 eval 表） | P0 前置 | 中 | 无 | 2026-06-12 |
+| **T1** | IDP-01/02/06（结构感知解析 + 切片 + 入库管道重构） | P0 | 大 | T0 | 2026-06-12 |
+| **T2** | HRE-03/04（BM25 + RRF 融合） | P0 | 中 | T1 | 2026-06-12 |
+| **T3** | OBS-01/02（Trace 采集 + 查询接口） | P0 | 中 | T0 | 2026-06-12 |
+| **T4** | HRE-05（Reranker 精排，在线 API） | P1 | 中 | T2 | 2026-06-15 |
+| **T5** | CHC-01/02（Citation 注入 + 解析） | P1 | 中 | T4 | 2026-06-15 |
+| **T6** | UQA-01（统一查询接口 /v2/query） | P1 | 中 | T5 + T3 | 2026-06-15 |
+| **T7** | IDP-03/04/05（表格描述 + 双层索引 + 文档元数据） | P2 | 大 | T1 | 2026-06-15 |
+| **T8** | HRE-01/02/06（Query 改写 + Query NER + 配置项） | P2 | 中 | T6 | 2026-06-15 |
+| **T9** | CHC-03/04（置信度 + 答案自检） | P2 | 中 | T5 | 2026-06-15 |
+| **T10** | UQA-02/03/04（分层子接口 retrieve/generate/rerank） | P3 | 中 | T6 | 2026-06-16 |
+| **T11** | EVA-01/02/03（RAGAS 评估） | P3 | 中 | T6 | 2026-06-16 |
+| **T12** | OBS-03（聚合统计） | P4 | 小 | T3 + 数据 | 2026-06-16 |
 
 ### 0.2 工程原则
 
@@ -447,6 +448,20 @@ class StructuredBlock:
 - **NaN → None**：ragas 单题返 NaN 时 `_to_float_or_none` 清洗后写 JSONB（PG JSONB 不接受 NaN）
 - **单测**：34 个新用例（[tests/test_v2_t11.py](../tests/test_v2_t11.py)）—— Schemas 4 + ragas helpers 3 + evaluate_with_ragas 4 + eval_runner 4 + resolve_kwargs 4 + Celery 主流程 4 + API endpoints 8 + router 注册 2 + 错误码 1
 - **回归**：V2 全套测试 271 → **305 passed**（T11 净增 34，零回归）；全量 mock 测试 709 passed + 40 skipped 全绿
+
+---
+
+## 收尾纪要（2026-06-17）
+
+**功能交付**：T0~T12 全部 ✅，PRD §3 六大模块（IDP / HRE / CHC / UQA / EVA / OBS）所有子需求 100% 实现。
+
+**单测**：357 passed（V2 全套），V1.5 + V2 全量回归 709 passed + 40 skipped，零回归。
+
+**集成验收**：[scripts/v2_smoke.py](../scripts/v2_smoke.py) 端到端通过；[scripts/eval_compare.py](../scripts/eval_compare.py) A.1 实验跑完 4 组 RAGAS 评估。详见 [progress.md 历史变更 2026-06-17](progress.md#历史变更)。
+
+**关键 Bug 修复**：smoke 暴露 OBS-03 快照丢失（writer 不 commit），已修。
+
+**A.2 前置**：当前 RERANKER_TYPE=none；扩文档量到 500+ chunks 后再评估 reranker 切换（详见 [docs/eval_a1_reranker_tuning.md](eval_a1_reranker_tuning.md)）。
 
 ---
 
