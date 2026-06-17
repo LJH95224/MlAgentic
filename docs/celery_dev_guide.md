@@ -171,8 +171,63 @@ worker 终端会看到：
 | S3 | `app/tasks/ingest_task.py::parse_and_ingest_task` | 文件上传后异步解析入库 |
 | S4 | `app/tasks/session_task.py::generate_session_title_task` | 首轮 AI 回复后自动取标题 |
 | S4 | `app/tasks/session_task.py::generate_session_summary_task` | `/summarize` 接口主动触发 |
+| T11 (V2.0) | `app/tasks/eval_task.py::run_evaluation_task` | RAGAS 评估接口主动触发 |
 
 新任务模块**必须在 `_TASK_MODULES` 注册**，否则 worker 不会发现它。
+
+---
+
+## 6b. RAGAS 评估任务（V2.0 新增）
+
+> 详细 PRD 见 [TyAgent V2.0 · 需求规格说明书](TyAgent%20V2.0%20%C2%B7%20%E9%9C%80%E6%B1%82%E8%A7%84%E6%A0%BC%E8%AF%B4%E6%98%8E%E4%B9%A6.md) §3.5；接口契约见 [v2_api_reference.md](v2_api_reference.md) §4。
+
+**任务**：`app.tasks.eval_task.run_evaluation_task`
+
+**触发**：`POST /api/v2/knowledge-bases/{kb_id}/evaluate`
+
+**输入**：`eval_task_id: str`（PG 表 `eval_tasks` 的 PK，UUID 字符串）
+
+**输出**：写回 `eval_tasks.eval_result` JSONB 字段，包含 4 项 RAGAS 指标（faithfulness / answer_relevancy / context_precision / context_recall）+ overall_score + per-question samples
+
+**进度锚点**：5（启动）→ 90（评估完成）→ 95（写回 PG）→ 100（已完成）
+
+**关键约束**：
+- 单题超时 `EVAL_QUESTION_TIMEOUT_S` 默认 60s（评估期 LLM 调用通常较慢）
+- 单批最多 `EVAL_MAX_QUESTIONS` 默认 100 题（防止评估爆 token）
+- ragas 模块按需 lazy import；环境无 ragas 时整批返 summary 全 None + error，不阻断 EvalTask 落库
+- NaN/Inf → None 清洗（PG JSONB 不接受 NaN）
+
+**关键设计**：
+- 不绕 HTTP 调 `/v2/query`：worker 与 uvicorn 不同进程，httpx 调用要求解析 host:port，部署复杂；改 `from app.api.v2.endpoints.query import generate_answer` 直接 import
+- 评估期不写 Trace（每题 ~7 step 会污染 agent_traces）；不调 faithfulness_check（ragas 自身会跑 Faithfulness 指标）
+- multi_query 评估期禁用（multi_query 烧 token 性价比差）
+- LLM/Embedding 经 LangChain ChatOpenAI(base_url=) 适配（LiteLLM 完全兼容 OpenAI 协议，无需 ragas 自定义 wrapper）
+
+**联调命令**：
+
+```bash
+# 触发评估（5 题）
+curl -X POST http://127.0.0.1:8000/api/v2/knowledge-bases/<kb_id>/evaluate \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "eval_dataset": [
+      {"question": "气象卫星有哪几类轨道？", "ground_truth": "极轨与静止两类。"}
+    ]
+  }'
+# → 立即返回 {task_id, status: "pending"}
+
+# 轮询
+curl http://127.0.0.1:8000/api/v2/knowledge-bases/<kb_id>/evaluations/<task_id>
+# → status pending → processing → completed
+```
+
+**worker 启动后看日志**：
+```
+[INFO/MainProcess] Received task: app.tasks.eval_task.run_evaluation_task[<id>]
+[INFO/MainProcess] 评估进度: 1/5 ...
+[INFO/MainProcess] 评估进度: 5/5 ...
+[INFO/MainProcess] Task ... succeeded in 120s: {'eval_task_id': ..., 'status': 'completed'}
+```
 
 ---
 
