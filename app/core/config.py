@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     app_debug: bool = Field(default=True, alias="APP_DEBUG")
     app_host: str = Field(default="0.0.0.0", alias="APP_HOST")
     app_port: int = Field(default=8000, alias="APP_PORT")
+    # 逗号分隔的前端 Origin 白名单；留空表示不启用 CORS 中间件
+    cors_allow_origins: str = Field(default="", alias="CORS_ALLOW_ORIGINS")
+    cors_allow_credentials: bool = Field(default=False, alias="CORS_ALLOW_CREDENTIALS")
 
     # --- 数据库（PostgreSQL，会话与消息存储；必须使用 asyncpg 驱动） ---
     # 注：知识切片库由 Milvus 管理（3.5 阶段引入），知识图谱由 Neo4j 管理（3.6 阶段引入），

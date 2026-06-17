@@ -11,7 +11,7 @@
 """
 
 import uuid
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -240,6 +240,25 @@ class TestTraceEndpoints:
         routes = [r.path for r in router.routes]
         assert "/traces/{trace_id}" in routes
         assert "/traces/sessions/{session_id}/traces" in routes
+
+    @pytest.mark.asyncio
+    async def test_get_trace_not_found_raises_business_error(self):
+        """trace 不存在时应抛 BusinessError，交给统一异常处理输出 ApiResponse。"""
+        from app.api import error_codes
+        from app.api.exceptions import BusinessError
+        from app.api.v2.endpoints.traces import get_trace
+
+        mock_result = MagicMock()
+        mock_result.scalars.return_value.all.return_value = []
+        mock_db = MagicMock()
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        with pytest.raises(BusinessError) as exc_info:
+            await get_trace("missing-trace", db=mock_db)
+
+        mock_db.execute.assert_awaited_once()
+        assert exc_info.value.code == error_codes.NOT_FOUND
+        assert "trace_id=missing-trace 不存在" == exc_info.value.message
 
 
 # ════════════════════════════════════════════════════════════════

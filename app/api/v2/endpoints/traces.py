@@ -13,7 +13,9 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api import error_codes
 from app.api.deps import get_db
+from app.api.exceptions import BusinessError
 from app.models.agent_trace import AgentTrace
 from app.schemas.v2.trace import (
     TraceDetail,
@@ -40,8 +42,7 @@ async def get_trace(
     steps = result.scalars().all()
 
     if not steps:
-        from fastapi import HTTPException
-        raise HTTPException(status_code=404, detail=f"trace_id={trace_id} 不存在")
+        raise BusinessError(error_codes.NOT_FOUND, f"trace_id={trace_id} 不存在")
 
     # 从根步骤取 total_latency_ms
     root_steps = [s for s in steps if s.parent_step is None]

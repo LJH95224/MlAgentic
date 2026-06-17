@@ -79,6 +79,20 @@ class TestBuildFilterExpr:
         )
         assert 'ARRAY_CONTAINS(allowed_roles, "ANALYST")' in expr
 
+    def test_string_literals_are_escaped(self):
+        """Milvus filter 中的双引号与反斜杠必须转义，避免表达式注入或语法错误。"""
+        expr = _build_filter_expr(
+            doc_type='report"2026',
+            document_id='doc"abc',
+            entity_tags=['台风"路径', 'C:\\data'],
+            current_role='ROLE"A',
+        )
+        assert 'ARRAY_CONTAINS(allowed_roles, "ROLE\\"A")' in expr
+        assert 'metadata["type"] == "report\\"2026"' in expr
+        assert 'document_id == "doc\\"abc"' in expr
+        assert '"台风\\"路径"' in expr
+        assert '"C:\\\\data"' in expr
+
 
 # ──────────────────── _format_hits ────────────────────
 

@@ -17,6 +17,7 @@ from app.rag.reranker import (
     NoopReranker,
     LiteLLMReranker,
     RerankResult,
+    SiliconFlowReranker,
     get_reranker,
 )
 
@@ -31,13 +32,13 @@ class TestNoopReranker:
     async def test_noop_returns_original_order(self):
         reranker = NoopReranker()
         chunks = [
-            {"content": "文档A", "document_id": "d1"},
-            {"content": "文档B", "document_id": "d2"},
+            {"content": "文档A", "document_id": "d1", "score": 0.72},
+            {"content": "文档B", "document_id": "d2", "score": 0.61},
         ]
         results = await reranker.rerank("查询", chunks, top_k=5)
         assert len(results) == 2
         assert results[0].content == "文档A"
-        assert results[0].relevance_score == 1.0
+        assert results[0].relevance_score == 0.72
 
     @pytest.mark.asyncio
     async def test_noop_respects_top_k(self):
@@ -149,15 +150,15 @@ class TestLiteLLMReranker:
             with patch("litellm.arerank", new=AsyncMock(side_effect=RuntimeError("API down"))):
 
                 chunks = [
-                    {"content": "文档A", "document_id": "d1"},
-                    {"content": "文档B", "document_id": "d2"},
+                    {"content": "文档A", "document_id": "d1", "score": 0.72},
+                    {"content": "文档B", "document_id": "d2", "score": 0.61},
                 ]
                 results = await reranker.rerank("查询", chunks, top_k=5)
 
-            # 降级：返回原顺序，score=0
+            # 降级：返回原顺序，并保留原始检索 score
             assert len(results) == 2
             assert results[0].content == "文档A"
-            assert results[0].relevance_score == 0.0  # 降级标记
+            assert results[0].relevance_score == 0.72
 
     @pytest.mark.asyncio
     async def test_rerank_top3_floor(self):
@@ -217,9 +218,23 @@ class TestGetReranker:
             settings.reranker_api_key = "sk-test"
             settings.reranker_api_base = "https://api.test.com/v1"
             settings.reranker_similarity_threshold = 0.3
+            settings.litellm_timeout = 60.0
             mock_settings.return_value = settings
             reranker = get_reranker()
             assert isinstance(reranker, LiteLLMReranker)
+
+    def test_api_type_siliconflow_returns_siliconflow(self):
+        with patch("app.rag.reranker.get_settings") as mock_settings:
+            settings = MagicMock()
+            settings.reranker_type = "api"
+            settings.reranker_model = "BAAI/bge-reranker-v2-m3"
+            settings.reranker_api_key = "sk-test"
+            settings.reranker_api_base = "https://api.siliconflow.cn/v1"
+            settings.reranker_similarity_threshold = 0.3
+            settings.litellm_timeout = 60.0
+            mock_settings.return_value = settings
+            reranker = get_reranker()
+            assert isinstance(reranker, SiliconFlowReranker)
 
     def test_empty_type_returns_noop(self):
         with patch("app.rag.reranker.get_settings") as mock_settings:

@@ -167,7 +167,7 @@ class TestHybridSearch:
             ]
             mock_client_fn.return_value = mock_client
 
-            # mock reranker：NoopReranker 给 score=1.0
+            # mock reranker：NoopReranker 保留原始检索 score
             from app.rag.reranker import NoopReranker
             mock_reranker.return_value = NoopReranker()
 
@@ -175,9 +175,8 @@ class TestHybridSearch:
 
             assert len(results) == 1
             assert results[0].content == "台风"
-            # 注：T4 后默认 NoopReranker 会把 score 覆盖为 1.0（"信任原排序、满分"语义）
-            # 检索原始 distance=0.95 由 hybrid_search 调用透传到 reranker 之前
-            assert results[0].score == 1.0
+            # NoopReranker 不应把原始检索分数覆盖成 1.0
+            assert results[0].score == 0.95
             assert mock_client.hybrid_search.called
 
     @pytest.mark.asyncio

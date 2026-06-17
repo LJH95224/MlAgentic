@@ -31,6 +31,20 @@ def _fresh_settings(**env_overrides):
     return get_settings()
 
 
+def _fresh_settings_no_env_file(**env_overrides):
+    """忽略 .env 文件，仅用进程环境变量验证 Settings 默认值 / 覆盖。"""
+    for k, v in env_overrides.items():
+        if v is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = v
+
+    from app.core.config import Settings, get_settings
+
+    get_settings.cache_clear()
+    return Settings(_env_file=None)
+
+
 def _cleanup(*keys):
     for k in keys:
         os.environ.pop(k, None)
@@ -54,6 +68,37 @@ def _field_by_name(schema, name: str):
 
 class TestV2Settings:
     """V2.0 新增 Settings 字段默认值 + 覆盖行为。"""
+
+    # ── 应用基础 / CORS ──
+
+    def test_cors_allow_origins_default_empty(self):
+        try:
+            s = _fresh_settings_no_env_file(CORS_ALLOW_ORIGINS=None)
+            assert s.cors_allow_origins == ""
+        finally:
+            _cleanup("CORS_ALLOW_ORIGINS")
+
+    def test_cors_allow_origins_override(self):
+        origins = "http://localhost:3000,http://127.0.0.1:5173"
+        try:
+            s = _fresh_settings_no_env_file(CORS_ALLOW_ORIGINS=origins)
+            assert s.cors_allow_origins == origins
+        finally:
+            _cleanup("CORS_ALLOW_ORIGINS")
+
+    def test_cors_allow_credentials_default_false(self):
+        try:
+            s = _fresh_settings_no_env_file(CORS_ALLOW_CREDENTIALS=None)
+            assert s.cors_allow_credentials is False
+        finally:
+            _cleanup("CORS_ALLOW_CREDENTIALS")
+
+    def test_cors_allow_credentials_override(self):
+        try:
+            s = _fresh_settings_no_env_file(CORS_ALLOW_CREDENTIALS="true")
+            assert s.cors_allow_credentials is True
+        finally:
+            _cleanup("CORS_ALLOW_CREDENTIALS")
 
     # ── Reranker ──
     # 注：当 .env 中有 RERANKER_* 配置时，"默认值"测试会读到 .env 的值

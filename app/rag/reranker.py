@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 class RerankResult:
     """Reranker 返回的单条结果。"""
 
-    index: int  # 原始 chunks 中的索引
+    index: int  # 原始 chunks 列表中的索引，用于调用方映射回检索结果
     relevance_score: float  # 精排分数
     content: str = ""  # 方便后续使用
     document_id: str = ""
@@ -98,7 +98,7 @@ class NoopReranker(BaseReranker):
             results.append(
                 RerankResult(
                     index=i,
-                    relevance_score=1.0,  # 不做精排，给满分表示"信任原排序"
+                    relevance_score=float(chunk.get("score", 0.0)),  # 保留原始检索分数
                     content=chunk.get("content", ""),
                     document_id=chunk.get("document_id", ""),
                     heading_path=chunk.get("heading_path"),
@@ -376,7 +376,7 @@ def _fallback(chunks: list[dict], top_k: int) -> list[RerankResult]:
         results.append(
             RerankResult(
                 index=i,
-                relevance_score=0.0,  # 降级标记
+                relevance_score=float(chunk.get("score", 0.0)),  # 降级时保留原始检索分数
                 content=chunk.get("content", ""),
                 document_id=chunk.get("document_id", ""),
                 heading_path=chunk.get("heading_path"),

@@ -49,6 +49,12 @@ def get_current_role() -> str:
 # ──────────────────── 过滤表达式拼装 ────────────────────
 
 
+def _milvus_str(value: str) -> str:
+    """把 Python 字符串转成 Milvus filter 可用的双引号字面量。"""
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
 def _build_filter_expr(
     doc_type: str | None,
     document_id: str | None,
@@ -66,19 +72,19 @@ def _build_filter_expr(
       - 多条件用小写 and 连接
     """
     # 权限基线：硬编码注入（不暴露给 LLM）
-    clauses = [f'ARRAY_CONTAINS(allowed_roles, "{current_role}")']
+    clauses = [f"ARRAY_CONTAINS(allowed_roles, {_milvus_str(current_role)})"]
 
     if doc_type:
         # JSON 字段访问 + 字符串等值
-        clauses.append(f'metadata["type"] == "{doc_type}"')
+        clauses.append(f'metadata["type"] == {_milvus_str(doc_type)}')
 
     if document_id:
-        clauses.append(f'document_id == "{document_id}"')
+        clauses.append(f"document_id == {_milvus_str(document_id)}")
 
     if entity_tags:
         # KG-04 图谱锚定后注入：召回任一标签匹配的 chunk
         # 用 Python 列表字面量语法序列化为 Milvus 接受的格式
-        tags_lit = "[" + ", ".join(f'"{t}"' for t in entity_tags) + "]"
+        tags_lit = "[" + ", ".join(_milvus_str(t) for t in entity_tags) + "]"
         clauses.append(f"ARRAY_CONTAINS_ANY(entity_tags, {tags_lit})")
 
     return " and ".join(clauses)

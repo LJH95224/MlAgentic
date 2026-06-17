@@ -972,6 +972,12 @@ python scripts/kg_smoke.py
 
 ## 历史变更
 
+- **2026-06-17**：V2.0 质量修复 batch1（防回归增强）
+  - API 基础设施：[app/main.py](../app/main.py) 接入 `CORSMiddleware`；[app/core/config.py](../app/core/config.py) 新增 `CORS_ALLOW_ORIGINS` / `CORS_ALLOW_CREDENTIALS`；[.env.example](../.env.example) 同步前端本地开发白名单示例
+  - RAG 精排降级语义：[app/rag/reranker.py](../app/rag/reranker.py) `NoopReranker` 改为保留原始检索 `score`，避免把 BM25/RRF 或 dense 分数覆盖成 1.0；[app/rag/hybrid_retriever.py](../app/rag/hybrid_retriever.py) 传入候选原始分数
+  - Trace 错误一致性：[app/api/v2/endpoints/traces.py](../app/api/v2/endpoints/traces.py) trace 不存在时统一抛 `BusinessError(NOT_FOUND)`，交由统一响应 handler 输出 `{code,message,data}`
+  - Milvus filter 安全性：[app/rag/retriever.py](../app/rag/retriever.py) 新增字符串字面量转义，覆盖权限角色、doc_type、document_id、entity_tags；hybrid 检索复用 `_build_filter_expr` 同步受益
+  - 单测同步：[tests/test_v2_t0.py](../tests/test_v2_t0.py)、[tests/test_v2_p1.py](../tests/test_v2_p1.py)、[tests/test_v2_t2.py](../tests/test_v2_t2.py)、[tests/test_v2_t3.py](../tests/test_v2_t3.py)、[tests/test_rag_retriever.py](../tests/test_rag_retriever.py) 增补/调整覆盖；验证命令需由用户按项目约定手动执行
 - **2026-06-17**：V2.0 全链路集成 smoke 端到端验收通过 ✅✅✅
   - [scripts/v2_smoke.py](../scripts/v2_smoke.py) 扩展覆盖 T10（/retrieve、/rerank、/generate 三个分层端点）+ T12（/api/v2/analytics 聚合统计），单脚本贯通 T0~T12 全链路
   - 12 项 ⬜ 集成验证全部勾掉：T0 启动建表 / T1 入库 / T2 BM25+RRF / T3 trace / T4 reranker / T7 doc_metadata / T8 三种改写路径 / T9 自检 / T10 分层端点 / T11 RAGAS / T12 analytics + ragas 安装

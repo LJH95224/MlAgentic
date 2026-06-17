@@ -43,7 +43,10 @@ cp .env.example .env
 ### 3. 启动服务
 
 ```bash
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+# uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+
+celery -A app.tasks.celery_app worker --pool=solo -l info
 ```
 
 启动后访问 <http://localhost:8000/docs> 查看 Swagger UI。

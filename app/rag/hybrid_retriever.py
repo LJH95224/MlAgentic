@@ -218,6 +218,7 @@ async def hybrid_search(
         {
             "content": r.content,
             "document_id": r.document_id,
+            "score": r.score,
             "entity_tags": r.entity_tags,
             "heading_path": r.heading_path,
             "block_type": r.block_type,
