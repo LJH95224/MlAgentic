@@ -22,6 +22,8 @@
   T7 IDP-03/04/05 表格描述 + 双层索引 + 文档元数据
   T8 HRE-01/02/06 Query 改写 + Query NER + 三层配置合并
   T9 CHC-03/04 置信度评分 + 答案自检
+  T10 UQA-02/03/04 分层子接口（/retrieve、/generate、/rerank）
+  T12 OBS-03 聚合统计（/api/v2/analytics）
 """
 
 from __future__ import annotations
@@ -354,6 +356,111 @@ async def run(args) -> None:
                 logger.info("  ✓ 5d trace 含 faithfulness_check 步骤")
             else:
                 logger.warning("  ⚠ 5d trace 缺 faithfulness_check")
+
+        # ──────── 8) T10 分层子接口（UQA-02/03/04） ────────
+        # 8a) UQA-02 /v2/retrieve（不调 LLM 的纯检索）
+        logger.info("[8a] UQA-02 /v2/retrieve：不调 LLM 的纯检索")
+        r = await client.post(
+            "/api/v2/retrieve",
+            json={
+                "query": "这份文档主要讲了什么",
+                "kb_ids": [kb_id],
+                "top_k": 5,
+                "rerank": False,         # 关 rerank 走纯混合检索
+                "enable_graph_rag": False,
+            },
+        )
+        retrieve_resp = _ensure(r)
+        assert "chunks" in retrieve_resp, "[8a] /retrieve 响应缺 chunks"
+        assert "total_retrieved" in retrieve_resp, "[8a] /retrieve 响应缺 total_retrieved"
+        chunks = retrieve_resp["chunks"]
+        logger.info(
+            "  ✓ /retrieve 返回 %d 条 chunks（total_retrieved=%d after_rerank=%d latency=%dms）",
+            len(chunks),
+            retrieve_resp.get("total_retrieved", 0),
+            retrieve_resp.get("after_rerank", 0),
+            retrieve_resp.get("total_latency_ms") or 0,
+        )
+        if chunks:
+            first = chunks[0]
+            for k in ("chunk_id", "content", "vector_score"):
+                assert k in first, f"[8a] chunks[0] 缺字段 {k}"
+            logger.info(
+                "  ✓ 首条 chunk_id=%s vector_score=%.3f bm25_score=%s rrf_score=%s",
+                first.get("chunk_id"),
+                first.get("vector_score") or 0,
+                first.get("bm25_score"),
+                first.get("rrf_score"),
+            )
+
+        # 8b) UQA-04 /v2/rerank（独立精排端点）
+        logger.info("[8b] UQA-04 /v2/rerank：独立精排端点")
+        rerank_candidates = [
+            {"id": "c1", "text": "气象卫星用于监测地球表面与大气层"},
+            {"id": "c2", "text": "今天的午餐吃什么"},
+            {"id": "c3", "text": "数值天气预报基于流体力学方程"},
+        ]
+        r = await client.post(
+            "/api/v2/rerank",
+            json={
+                "query": "气象卫星",
+                "candidates": rerank_candidates,
+                "top_n": 3,
+            },
+        )
+        rerank_resp = _ensure(r)
+        assert "results" in rerank_resp, "[8b] /rerank 响应缺 results"
+        results = rerank_resp["results"]
+        assert len(results) >= 1, "[8b] /rerank 至少返回 1 条"
+        logger.info(
+            "  ✓ /rerank 返回 %d 条；首条 id=%s rerank_score=%.4f（latency=%dms）",
+            len(results),
+            results[0].get("id"),
+            results[0].get("rerank_score") or 0,
+            rerank_resp.get("total_latency_ms") or 0,
+        )
+        # 验降序
+        scores = [r["rerank_score"] for r in results]
+        assert scores == sorted(scores, reverse=True), "[8b] results 应按 rerank_score 降序"
+
+        # 8c) UQA-03 /v2/generate（开发者自定义 context 跳过检索）
+        logger.info("[8c] UQA-03 /v2/generate：自定义 context 跳过检索")
+        custom_context = [
+            {
+                "chunk_id": "doc1_p1",
+                "content": "气象卫星是搭载在人造地球卫星上的气象观测仪器，"
+                           "用于从太空对地球大气和地表进行连续、大范围的观测。",
+                "source_label": "气象学导论_P12",
+            },
+            {
+                "chunk_id": "doc1_p2",
+                "content": "极轨卫星轨道倾角接近 90 度，每天可对全球进行 2 次完整覆盖；"
+                           "静止卫星位于赤道上空 36000 公里处，可对同一区域持续观测。",
+                "source_label": "气象学导论_P15",
+            },
+        ]
+        r = await client.post(
+            "/api/v2/generate",
+            json={
+                "query": "气象卫星有哪几类轨道？分别有什么特点？",
+                "context_chunks": custom_context,
+                "options": {
+                    "enable_citation": True,
+                    "enable_faithfulness_check": False,
+                },
+            },
+        )
+        gen_resp = _ensure(r)
+        for k in ("answer", "source_citations", "confidence", "faithfulness_check"):
+            assert k in gen_resp, f"[8c] /generate 响应缺字段 {k}"
+        assert len(gen_resp["answer"]) > 0, "[8c] answer 不应为空"
+        logger.info(
+            "  ✓ /generate answer_len=%d citations=%d confidence=%.3f faithfulness=%s",
+            len(gen_resp["answer"]),
+            len(gen_resp["source_citations"] or []),
+            gen_resp.get("confidence") or 0,
+            gen_resp.get("faithfulness_check"),
+        )
 
         # ──────── 7) 清理 ────────
         if not args.skip_cleanup:
