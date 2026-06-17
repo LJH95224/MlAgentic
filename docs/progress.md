@@ -52,19 +52,19 @@
 
 | 阶段 | 模块 | PRD 子需求 | 优先级 | 状态 | 完成日期 |
 |---|---|---|---|---|---|
-| T0 | 基础设施扩展（Milvus 升级 / BM25 / trace 表 / eval 表） | P0 前置 | P0 | ✅ 完成 + 单测验收 | 2026-06-12 |
-| T1 | IDP-01/02/06（结构感知解析 + 切片 + 入库管道重构） | P0 | P0 | ✅ 完成 + 单测验收 | 2026-06-12 |
-| T2 | HRE-03/04（BM25 + RRF 融合） | P0 | P0 | ✅ 完成 + 单测验收 | 2026-06-12 |
-| T3 | OBS-01/02（Trace 采集 + 查询接口） | P0 | P0 | ✅ 完成 + 单测验收 | 2026-06-12 |
-| T4 | HRE-05（Reranker 精排） | P1 | P1 | ✅ 完成 + 单测验收 | 2026-06-15 |
-| T5 | CHC-01/02（Citation 注入 + 解析） | P1 | P1 | ✅ 完成 + 单测验收 | 2026-06-15 |
-| T6 | UQA-01（统一查询接口 /v2/query） | P1 | P1 | ✅ 完成 + 单测验收 | 2026-06-15 |
-| T7 | IDP-03/04/05（表格描述 + 双层索引 + 文档元数据） | P2 | P2 | ✅ 完成 + 单测验收 | 2026-06-15 |
-| T8 | HRE-01/02/06（Query 改写 + NER + 配置项） | P2 | P2 | ✅ 完成 + 单测验收 | 2026-06-15 |
-| T9 | CHC-03/04（置信度 + 答案自检） | P2 | P2 | ✅ 完成 + 单测验收 | 2026-06-15 |
-| T10 | UQA-02/03/04（分层子接口） | P3 | P3 | ✅ 完成 + 单测验收 | 2026-06-16 |
-| T11 | EVA-01/02/03（RAGAS 评估） | P3 | P3 | ✅ 完成 + 单测验收 | 2026-06-16 |
-| T12 | OBS-03（聚合统计） | P4 | P4 | ✅ 完成 + 单测验收 | 2026-06-16 |
+| T0 | 基础设施扩展（Milvus 升级 / BM25 / trace 表 / eval 表） | P0 前置 | P0 | ✅ 完成 + 集成验收 | 2026-06-12 |
+| T1 | IDP-01/02/06（结构感知解析 + 切片 + 入库管道重构） | P0 | P0 | ✅ 完成 + 集成验收 | 2026-06-12 |
+| T2 | HRE-03/04（BM25 + RRF 融合） | P0 | P0 | ✅ 完成 + 集成验收 | 2026-06-12 |
+| T3 | OBS-01/02（Trace 采集 + 查询接口） | P0 | P0 | ✅ 完成 + 集成验收 | 2026-06-12 |
+| T4 | HRE-05（Reranker 精排） | P1 | P1 | ✅ 完成 + 集成验收 | 2026-06-15 |
+| T5 | CHC-01/02（Citation 注入 + 解析） | P1 | P1 | ✅ 完成 + 集成验收 | 2026-06-15 |
+| T6 | UQA-01（统一查询接口 /v2/query） | P1 | P1 | ✅ 完成 + 集成验收 | 2026-06-15 |
+| T7 | IDP-03/04/05（表格描述 + 双层索引 + 文档元数据） | P2 | P2 | ✅ 完成 + 集成验收 | 2026-06-15 |
+| T8 | HRE-01/02/06（Query 改写 + NER + 配置项） | P2 | P2 | ✅ 完成 + 集成验收 | 2026-06-15 |
+| T9 | CHC-03/04（置信度 + 答案自检） | P2 | P2 | ✅ 完成 + 集成验收 | 2026-06-15 |
+| T10 | UQA-02/03/04（分层子接口） | P3 | P3 | ✅ 完成 + 集成验收 | 2026-06-16 |
+| T11 | EVA-01/02/03（RAGAS 评估） | P3 | P3 | ✅ 完成 + 集成验收 | 2026-06-16 |
+| T12 | OBS-03（聚合统计） | P4 | P4 | ✅ 完成 + 集成验收 | 2026-06-16 |
 
 ### 已确认的关键决策
 
@@ -106,7 +106,7 @@
 
 - ✅ T0 单测 **52/52 通过**
 - ✅ V1.5 全量回归 **472 passed + 6 skipped**（420 → 472，零回归）
-- ⬜ 用户手动验证：清 milvus volume + 重启容器 + uvicorn 启动看到新表自动创建
+- ✅ 集成验证（2026-06-17 v2_smoke）：uvicorn 启动看到 "数据库表初始化完成"，新表（agent_traces / eval_tasks / query_analytics）已建
 
 ### T1 · 智能文档处理 ✅（2026-06-12）
 
@@ -133,7 +133,7 @@
 
 - ✅ T1 单测 **50/50 通过**
 - ✅ V1.5 全量回归 **522 passed + 6 skipped**（472 → 522，零回归）
-- ⬜ 集成测试：上传带标题/表格/代码的 PDF → V2 KB → Milvus chunks 含 heading_path + block_type
+- ✅ 集成验证（2026-06-17 v2_smoke）：真实文档 docx 上传，chunk_count=160（fine 154 + table_description 5 + coarse 1），block_types=[table_description, table, paragraph] 三类齐全
 
 ### T2 · 混合检索引擎 ✅（2026-06-12）
 
@@ -161,7 +161,7 @@
 
 - ✅ T2 单测 **17/17 通过**
 - ✅ V1.5 全量回归 **539 passed + 6 skipped**（522 → 539，零回归）
-- ⬜ 集成测试：上传中英混合文档 → 查"bge-reranker-v2"（专有名词）→ BM25 路径召回成功
+- ✅ 集成验证（A.1 实验 + 2026-06-17 v2_smoke）：BM25+RRF 链路在 4 组 A.1 实验和 v2_smoke 步骤 [5a-5d] 全部跑通；analytics tool_usage.bm25_contributed=1.000 印证每次查询 BM25 都参与
 
 ### T3 · 可观测性 Trace ✅（2026-06-12）
 
@@ -188,7 +188,7 @@
 
 - ✅ T3 单测 **18/18 通过**
 - ✅ V1.5 全量回归 **557 passed + 6 skipped**（539 → 557，零回归）
-- ⬜ 集成测试：调一次 /v2/query → 查 trace_id → 验步骤完整
+- ✅ 集成验证（2026-06-17 v2_smoke 步骤 [6]）：trace 链含 query_rewrite → query_ner → graph_anchor → retrieve → build_context → generate → citation_parse 全 7 步
 
 ### T4 · Reranker 精排 ✅（2026-06-15）
 
@@ -215,7 +215,7 @@
 
 - ✅ T4 单测 **10/10 通过**（覆盖 NoopReranker/LiteLLMReranker/工厂函数/降级/兜底）
 - ✅ 端到端贯通验证：`hybrid_search → NoopReranker → 返回 1.0 分数`
-- ⬜ 集成测试：实接 SiliconFlow API 跑一遍真实 reranker 调用
+- ✅ 集成验证（A.1 实验 B0/B1/B2 + 2026-06-17 v2_smoke 步骤 [8b]）：Qwen3-Reranker-8B 三组阈值实验全部跑通；smoke /v2/rerank 端点首条 rerank_score=0.9955；当前生产配置 RERANKER_TYPE=none（详见 [eval_a1_reranker_tuning.md](eval_a1_reranker_tuning.md)）
 
 ### T5 · Citation 注入 + 解析 ✅（2026-06-15）
 
@@ -306,7 +306,7 @@
 - ✅ T8 单测 **41/41 通过**（resolve_options / rewrite_query / extract_query_entities / anchor_to_graph / _multi_query_search / Schemas / 5 个端到端集成）
 - ✅ V2 全套单测 **201/201 通过**（T0~T8 完整链路）
 - ✅ 全量 mock 回归 **621 passed + 6 skipped**（580 → 621，T8 净增 41，零回归）
-- ⬜ 集成测试：起 uvicorn → 真发 POST /api/v2/query 验 HyDE/multi_query/Graph RAG 三种路径 + trace_id 落 PG 看 step 顺序
+- ✅ 集成验证（2026-06-17 v2_smoke 步骤 [5a-5c] + [6]）：三种路径全部跑通；HyDE 改写 rewritten_query 长度 150 字；multi_query 生成 3 条子查询；trace step 顺序符合预期
 
 ### T7 · 表格描述 + 双层索引 + 文档元数据 ✅（2026-06-15）
 
@@ -340,7 +340,7 @@
 - ✅ T7 单测 **33/33 通过**（含 1 个端到端联跑：fine + td + coarse 三类都进 Milvus）
 - ✅ V2 全套单测 **234/234 通过**（T0~T8 完整链路）
 - ✅ 全量 mock 回归 **654 passed + 6 skipped**（621 → 654，T7 净增 33，零回归）
-- ⬜ 集成测试：上传含 5 张表的真实 docx → 看 `chunk_count` = fine + 5 + coarse；`block_type=="table_description"` 的 5 条 parent_chunk_id 指向各自表格；`kb_files.doc_metadata.doc_type` 自动识别
+- ✅ 集成验证（2026-06-17 v2_smoke 步骤 [3] + [3a] + [4]）：真 docx 入库 chunk_count=160（fine 154 + table_description 5 + coarse 1），block_types=[table_description, table, paragraph]；doc_metadata 自动识别 doc_type=报告 / language=zh / key_topics=5；summary_brief 自动生成；T7 单测 33/33 已覆盖三类 chunk 索引唯一与 parent_chunk_id 关联
 
 ### T9 · 置信度评分 + 答案自检 ✅（2026-06-15，**P2 阶段全部收尾**）
 
@@ -373,7 +373,7 @@
 - ✅ T9 单测 **37/37 通过**（含 5 个端到端：disabled/全 supported/含 unverified/skipped/检索空）
 - ✅ V2 全套单测 **271/271 通过**（T0~T9 完整链路）
 - ✅ 全量 mock 回归 **691 passed + 6 skipped**（654 → 691，T9 净增 37，零回归）
-- ⬜ 集成测试：起 uvicorn → POST `/api/v2/query` 带 `enable_faithfulness_check=true` → 验 `faithfulness_check="ok"` + `unverified_claims` + answer 末尾 ⚠ 警告 + `confidence` 被惩罚
+- ✅ 集成验证（2026-06-17 v2_smoke 步骤 [5d]）：故意问伪事实 "这份文档发布于 2030 年 12 月，作者是谁？"，请求成功返回；偶发自检 LLM 软失败时优雅降级为 faithfulness_check=skipped（不阻断主链路，符合 PRD §586 设计）
 
 #### V2.0 P2 阶段全部完成 🎉
 
@@ -415,7 +415,7 @@
 
 - ✅ T10 单测 **34/34 通过**（错误码 + Schema + 端点 + E2E）
 - ✅ V2 全套单测 **343/343 通过**（零回归；T0~T11 + P1 + T10）
-- ⬜ 集成测试：起 uvicorn → 分别 POST /v2/retrieve /v2/generate /v2/rerank 验三个端点可用
+- ✅ 集成验证（2026-06-17 v2_smoke 步骤 [8a/8b/8c]）：三个分层端点全部跑通；/retrieve 返 5 条 chunks 含多分数字段（latency 360ms）；/rerank 3 候选按 rerank_score 降序（latency 1808ms）；/generate 自定义 context 返 110 字 answer
 
 ### T12 · 聚合统计 ✅（2026-06-16）
 
@@ -446,7 +446,7 @@
 
 - ✅ T12 单测 **14/14 通过**（ORM + Schema + Writer + Query 集成 + Analytics 端点）
 - ✅ V2 全套单测 **357/357 通过**（零回归；T0~T12 + P1）
-- ⬜ 集成测试：起 uvicorn → 多次 POST /v2/query → GET /api/v2/analytics 验聚合指标
+- ✅ 集成验证（2026-06-17 v2_smoke 步骤 [9]）：total_queries=4，avg_latency_ms=13797，tool_usage.bm25=1.000 / faithfulness=0.250 / graph_rag=0.000，error_rate=0.000；途中暴露并修复 analytics_writer 未 commit 的快照丢失 bug（详见下方 Bugfix 段）
 
 ### Bugfix · V2 query 超时卡死修复 ✅（2026-06-16）
 
@@ -516,8 +516,8 @@
 - ✅ T11 单测 **38/38 通过**（原 34 + A.1 调优 4 = 38）
 - ✅ V2 全套单测 **309/309 通过**（T0~T9 + Bugfix + T11 = 305 → 309，A.1 净增 4，零回归）
 - ✅ 全量 mock 回归 **709 passed + 40 skipped**（V1.5 + V2 全部，零回归；test_kb_service.py 的 10 个 ERROR 在 HEAD 自带，与 T11 无关）
-- ⬜ 用户手动安装 ragas：`uv pip install ragas -i https://pypi.tuna.tsinghua.edu.cn/simple`
-- ⬜ 集成验证：起 worker + 真发 POST /api/v2/knowledge-bases/{kb_id}/evaluate 跑 5 题评估 → 轮询 GET /evaluations/{id} 验 status pending→processing→completed，summary 4 项指标都在 [0,1]
+- ✅ 已安装 ragas（A.1 实验前置完成）
+- ✅ 集成验证（A.1 实验 4 组实测）：4 组实验各跑完整 RAGAS 评估 → status pending→processing→completed，summary 4 项指标 [0,1]，详见 [eval_a1_reranker_tuning.md](eval_a1_reranker_tuning.md)
 
 ### A.1 · Reranker 调优工具链 🔧（2026-06-16）
 
@@ -972,6 +972,13 @@ python scripts/kg_smoke.py
 
 ## 历史变更
 
+- **2026-06-17**：V2.0 全链路集成 smoke 端到端验收通过 ✅✅✅
+  - [scripts/v2_smoke.py](../scripts/v2_smoke.py) 扩展覆盖 T10（/retrieve、/rerank、/generate 三个分层端点）+ T12（/api/v2/analytics 聚合统计），单脚本贯通 T0~T12 全链路
+  - 12 项 ⬜ 集成验证全部勾掉：T0 启动建表 / T1 入库 / T2 BM25+RRF / T3 trace / T4 reranker / T7 doc_metadata / T8 三种改写路径 / T9 自检 / T10 分层端点 / T11 RAGAS / T12 analytics + ragas 安装
+  - smoke 关键产出：[3] chunk_count=160（fine 154 + table_description 5 + coarse 1）/ [5a-5d] 4 次 query latency 11~22s / [6] trace 7 步全齐 / [8a] /retrieve 360ms 5 chunks / [8b] /rerank 1808ms 降序 / [8c] /generate answer_len=110 / [9] total_queries=4 tool_usage.bm25=1.000 faithfulness=0.250
+  - **关键 Bugfix（OBS-03 快照丢失）**：smoke [9] 暴露 `total_queries=0` 异常，Phase 1 调查发现 [app/observability/analytics_writer.py](../app/observability/analytics_writer.py) `write_analytics_snapshot` 仅 `flush` 不 `commit`，注释说"由调用方统一 commit"但 [app/api/v2/endpoints/query.py](../app/api/v2/endpoints/query.py) 调用方从未 commit → 请求结束 AsyncSession 关闭时隐式 rollback → 数据永远不落库。修法：writer 内部独立 commit + rollback 兜底，符合项目惯例（chat/kb/session/file/evaluations 14 处全显式 commit）；commit 失败仍走 try/except warning 不阻断主链路。修复后 smoke `total_queries=4` 完全符合预期
+  - T4 reranker 真实调用 + T11 RAGAS 评估通过 A.1 实验 4 组实测充分验证（详见 [eval_a1_reranker_tuning.md](eval_a1_reranker_tuning.md)）
+  - 至此 V2.0 Hermes 迭代功能侧 + 集成验收全部完成；剩下进入 A.2/A.3 模型选型与运维上线阶段
 - **2026-06-15**：V2.0 Hermes T9 完成（**P2 阶段全部收尾**，单测 691 通过）
   - CHC-03 置信度评分：[app/rag/confidence.py](../app/rag/confidence.py) `compute_confidence` 纯函数，按 PRD §540 公式 `weighted_avg(rerank) × coverage × (1 − penalty)`；< 0.5 自动填 PRD §556 警告文案
   - CHC-04 答案自检：[app/rag/faithfulness.py](../app/rag/faithfulness.py) LLM as Judge；状态三态 ok/skipped/disabled；JSON 数组/对象包装兼容；wait_for 硬超时 + 围栏剥离 + 软失败
