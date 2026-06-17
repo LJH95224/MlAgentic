@@ -910,3 +910,434 @@ redis:
 - `kb_ids` 跨 Collection 合并重排序的代码位置与性能基线
 - 端到端 smoke 脚本走通的完整链路
 - V1.5 整体验收结论
+
+---
+
+# 第三部分 · V2.0 Hermes 增量
+
+> **范围**：本部分仅记录 V2.0 在 V1.5 基础上的**增量**架构内容；V1.5 数据管理层架构（KB / 文件 / 异步任务）见第二部分。
+> **写作约定**：每节 1~3 段说明"做了什么"+"为什么这么做"，关键代码用 `[文件名](../app/xxx/yyy.py)` 链接到源文件，关键设计决策从 [progress.md](progress.md) 各 T 段提炼，不重复细节实现描述。
+> **配套文档**：[v2_api_reference.md](v2_api_reference.md)（接口契约）/ [v2_frontend_guide.md](v2_frontend_guide.md)（前端联调）/ [v2_dev_plan.md](v2_dev_plan.md)（阶段拆分）。
+
+## 23. V2.0 概览
+
+### 23.1 迭代目标
+
+V2.0 代号 Hermes，核心目标：把 RAG 从"能跑通"升级为"效果可信赖"。在 V1.5 数据管理层（会话/知识库/文件入库）之上，对 RAG 链路三个关键节点分别攻坚：
+
+- **文档切得不好** → 智能文档处理（IDP）：结构感知解析 + 结构感知切片 + 双层索引
+- **检索召回不准** → 混合检索引擎（HRE）：BM25 + RRF + Reranker + Query 改写 + Graph RAG 锚定
+- **模型拿着错误上下文生成幻觉** → 答案溯源与置信度（CHC）：Citation 注入/解析 + 答案自检 + 置信度评分
+
+同时配套可观测性 Trace（OBS）和 RAGAS 评估（EVA），让效果改进从主观感受变为可量化数据。
+
+### 23.2 与 V1.5 的差异速览
+
+| 维度 | V1.5 现状 | V2.0 目标 |
+|------|-----------|-----------|
+| 文档切片 | RecursiveCharacterTextSplitter 按字符数机械切割 | 结构感知切片 + 双层索引（段落摘要 + 细粒度 Chunk） |
+| 检索策略 | 纯向量检索（COSINE 相似度） | 向量 + BM25 混合检索 + RRF 融合 + Reranker 精排 |
+| 知识图谱 | 独立 Graph Tool，Agent 自行决策是否调用 | 融入检索主链路：Query NER → 图谱锚定 → 向量过滤 |
+| 答案溯源 | 无 | Citation 注入 + source_citations 结构化返回 |
+| 幻觉控制 | System Prompt 约束 | 答案自检节点 + 置信度评分 + 低置信度预警 |
+| 对外接口 | 多个独立接口，开发者需自行组装 | 统一 /v2/query 封装全链路，分层子接口支持深度定制 |
+| 效果评估 | 无 | 内置 RAGAS 指标评估接口 |
+| 可观测性 | 无 Trace | 完整 agent_traces 表 + Trace 查询接口 + 聚合统计 |
+
+### 23.3 总体架构图（V2 检索全链路）
+
+```
+用户 Query
+    │
+    ▼
+┌─────────────────────────────────────┐
+│  Query 预处理层                      │
+│  ├─ Query 改写（none / HyDE / multi）│
+│  └─ NER 实体识别（Query → 实体列表） │
+└─────────────────┬───────────────────┘
+                  │
+        ┌─────────┴─────────┐
+        ▼                   ▼
+┌──────────────┐   ┌────────────────────┐
+│  Neo4j       │   │  并行检索层         │
+│  单跳图谱查询 │   │  ├─ Milvus 稠密向量 │
+│  → 实体标签  │   │  └─ BM25 稀疏向量   │
+└──────┬───────┘   └─────────┬──────────┘
+       │                     │
+       └──────────┬──────────┘
+                  ▼
+        ┌─────────────────┐
+        │  RRF 融合重排序  │
+        │  k=60 双路融合   │
+        └────────┬────────┘
+                 ▼
+        ┌─────────────────┐
+        │  Reranker 精排   │
+        │  + 相关性过滤    │
+        └────────┬────────┘
+                 ▼
+        ┌─────────────────────────────┐
+        │  Context 组装               │
+        │  ├─ Chunk 编号注入 [1][2]   │
+        │  └─ 来源/元数据携带         │
+        └────────┬────────────────────┘
+                 ▼
+        ┌─────────────────┐
+        │  LLM 生成        │
+        └────────┬────────┘
+                 ▼
+        ┌──────────────────────────────┐
+        │  答案后处理层                 │
+        │  ├─ Citation 解析            │
+        │  ├─ 答案自检（Faithfulness） │
+        │  └─ 置信度评分               │
+        └────────┬─────────────────────┘
+                 ▼
+        结构化响应（answer + citations + confidence + trace_id）
+```
+
+### 23.4 阶段交付概览（T0~T12）
+
+V2.0 按 13 个阶段交付（T0~T12），按 PRD §8 优先级链推进。详见 [progress.md V2.0 总表](progress.md#v20-hermes--专业级-rag-引擎进行中-)。
+
+| 阶段 | 模块 | 优先级 | 完成日期 |
+|------|------|--------|----------|
+| T0 | 基础设施扩展（BM25 Schema / Trace 表 / Eval 表） | P0 | 2026-06-12 |
+| T1 | IDP-01/02/06 结构感知解析 + 切片 + 入库管道 | P0 | 2026-06-12 |
+| T2 | HRE-03/04 BM25 + RRF 融合 | P0 | 2026-06-12 |
+| T3 | OBS-01/02 Trace 采集 + 查询接口 | P0 | 2026-06-12 |
+| T4 | HRE-05 Reranker 精排 | P1 | 2026-06-15 |
+| T5 | CHC-01/02 Citation 注入 + 解析 | P1 | 2026-06-15 |
+| T6 | UQA-01 统一查询接口 /v2/query | P1 | 2026-06-15 |
+| T7 | IDP-03/04/05 表格描述 + 双层索引 + 文档元数据 | P2 | 2026-06-15 |
+| T8 | HRE-01/02/06 Query 改写 + NER + 配置项 | P2 | 2026-06-15 |
+| T9 | CHC-03/04 置信度 + 答案自检 | P2 | 2026-06-15 |
+| T10 | UQA-02/03/04 分层子接口 | P3 | 2026-06-16 |
+| T11 | EVA-01/02/03 RAGAS 评估 | P3 | 2026-06-16 |
+| T12 | OBS-03 聚合统计 | P4 | 2026-06-16 |
+
+## 24. T0+T1+T7 智能文档处理（IDP）
+
+### 24.1 V2 KB Collection Schema（15 字段）
+
+[app/rag/schema.py](../app/rag/schema.py) 的 `build_v2_kb_collection_schema()` 在 V1.5 8 字段基础上新增 7 个字段，共 15 字段：
+
+| 字段 | DataType | 说明 |
+|------|----------|------|
+| V1.5 继承字段 | (8 个) | chunk_id / vector / document_id / content / allowed_roles / entity_tags / metadata / kb_id |
+| **heading_path** | ARRAY<VARCHAR>(cap=10) | 标题层级路径（IDP-02） |
+| **block_type** | VARCHAR(32) | paragraph / table / code / list / table_description |
+| **page_number** | INT32 | PDF 场景页码 |
+| **position_index** | INT32 | 文档内顺序位置 |
+| **parent_chunk_id** | VARCHAR(64) | 细粒度 Chunk 指向摘要 Chunk |
+| **is_summary** | BOOL | 是否为双层索引摘要层 |
+| **sparse_vector** | SPARSE_FLOAT_VECTOR | BM25 稀疏向量（T2 启用） |
+
+稀疏向量索引走 `SPARSE_INVERTED_INDEX + BM25` 度量。V2 Schema 独立于 V1.5（`create_v2_kb_collection`），互不影响。
+
+### 24.2 结构感知解析（StructuredBlock）
+
+[app/ingest/parser.py](../app/ingest/parser.py) 的 `StructuredBlock` 数据类（block_id / block_type / heading_path / content / page_number / position_index），搭配 4 个结构感知解析器：
+
+- **PDF**：PyMuPDF 按坐标和字体大小/粗体推断标题层级
+- **DOCX**：python-docx 直接读 `paragraph.style.name` 判断 heading 级别
+- **Markdown**：markdown-it-py 解析 ATX 标题 + 代码块（需 `.enable("table")` 显式启表格）
+- **TXT**：连续空行分段，无层级结构
+
+V1.5 的 `parse_document()` 完全不动，V2 新增独立的 `parse_document_structured()` 入口。
+
+### 24.3 结构感知切片（StructuredChunk）
+
+[app/ingest/structured_splitter.py](../app/ingest/structured_splitter.py) 的 `StructuredChunk` + `split_structured_blocks()` 按优先级切片：
+
+1. **代码块/表格**：整块保留为一个 chunk，不可切断
+2. **标题段落组**：标题 + 下属正文合并，超出 `chunk_size` 时在段落边界切
+3. **普通段落**：`RecursiveCharacterTextSplitter` 兜底
+
+`heading_path` 在标题+段落组合 chunk 时取段落块的（含标题自身），确保路径完整。
+
+### 24.4 11 步入库管道
+
+[app/tasks/ingest_task.py](../app/tasks/ingest_task.py) 的 `_main` 函数串联 11 步（V1.5 7 步→ V2 11 步）：
+
+```
+Step  1: status=processing, progress=0
+Step  2: 结构感知解析（IDP-01）                    [progress=15]
+Step  3: 结构感知切片（IDP-02）                    [progress=25]
+Step  4: 表格描述生成（IDP-03）                    [progress=30]
+Step  5: 粗粒度摘要生成（IDP-04 双层索引）          [progress=40]
+Step  6: 文档元数据提取（IDP-05）                  [progress=45]
+Step  7: 批量向量嵌入                              [progress=65]
+Step  8: 写入 Milvus V2（15 字段）                 [progress=80]
+Step  9: NER 实体抽取 → 写入 Neo4j                [progress=92]
+Step 10: BM25 索引确认（Milvus 自动）              [progress=97]
+Step 11: status=completed, progress=100
+```
+
+V1.5 版 `ingest_task_v1.py` 已归档保留供参考。
+
+### 24.5 三类 chunk 的 chunk_index 全局唯一策略
+
+入库产生三类 chunk：fine（细粒度）、table_description（表格描述）、coarse（粗粒度摘要）。`chunk_index` 分配策略：
+
+- fine：用 splitter 给的 0..N-1
+- table_description：从 `len(fine)` 起递增
+- coarse：从 `len(fine) + len(td)` 起递增
+
+`_make_chunk_id_int(document_id, index)` 用 SHA256 → INT64 保证幂等 upsert 不冲突。`parent_chunk_id` 存 INT64 整数字符串（VARCHAR 64），Milvus 检索时可直接做 `expr` 子查询。
+
+### 24.6 表格描述 / 双层索引 / 文档元数据（IDP-03/04/05）
+
+- **IDP-03**（[app/ingest/table_description.py](../app/ingest/table_description.py)）：LLM 对每张表格生成自然语言描述作为额外 chunk（`block_type="table_description"`），参与向量检索但不参与 BM25（避免描述词汇干扰精确匹配）。`Semaphore(idp_concurrency)` 限并发 + `wait_for(idp_llm_timeout_s)` 硬超时。
+- **IDP-04**（[app/ingest/dual_layer.py](../app/ingest/dual_layer.py)）：按 `heading_path[:-1]` 父级标题聚合 fine chunks，LLM 生成摘要作为粗粒度 chunk（`is_summary=True`）。fine chunks 的 `parent_chunk_id` 用 `dataclasses.replace` 回填指向粗 chunk。
+- **IDP-05**（[app/ingest/doc_metadata.py](../app/ingest/doc_metadata.py)）：LLM 提取 doc_type / doc_date / language / key_topics / summary_brief 写入 `kb_files.doc_metadata` JSONB + `summary_brief` Text。
+
+三步均遵循软失败原则：单步失败不阻断主链路，沿用 V1.5 NER 软失败模式。
+
+## 25. T2+T4+T8 混合检索引擎（HRE）
+
+### 25.1 BM25 稀疏向量（Milvus 内置 Function）
+
+Milvus 2.5+ 原生支持稀疏向量 + BM25，无需 jieba 手动分词。在 Schema 中声明 `Function(content→sparse_vector, BM25)`，插入时 Milvus 自动分词+计算稀疏向量。查询时直接传原始文本。
+
+关键配置：`content` 字段需 `enable_analyzer=True`（BM25 Function 前提），索引参数 `bm25_k1=1.2`、`bm25_b=0.75`、`drop_ratio_build=0.2`（建索引时丢弃低频词后 20%，减小体积）。
+
+### 25.2 RRF 融合（dense + BM25）
+
+[app/rag/hybrid_retriever.py](../app/rag/hybrid_retriever.py) 的 `hybrid_search()` 使用 Milvus `AnnSearchRequest` + `RRFRanker` 一次性查询双路：
+
+- dense 检索（HNSW + COSINE）：语义相似度
+- BM25 检索（SPARSE_INVERTED_INDEX + BM25）：精确词频匹配
+
+RRF 参数 k=60（学术标准值，可通过 `RRF_K` 配置调整）。降级策略：BM25 失败 → 纯向量检索；`bm25_enable=False` → 纯向量检索。
+
+### 25.3 Reranker 精排（在线 API + Noop 降级）
+
+[app/rag/reranker.py](../app/rag/reranker.py) 的抽象 `BaseReranker` + 两种实现：
+
+- **LiteLLMReranker**：走 `litellm.arerank` API，支持 SiliconFlow/Cohere/Jina 格式。`Semaphore(5)` 限并发，超时复用 `litellm_timeout`。失败时降级返回原顺序（score=0 标记）。
+- **NoopReranker**：原顺序 + score=1.0（表示"不做精排，信任原排序"）。当前生产配置 `RERANKER_TYPE=none`，详见 [eval_a1_reranker_tuning.md](eval_a1_reranker_tuning.md)（A.1 实验表明 Qwen3-Reranker-8B 当前弊大于利）。
+
+过滤规则：`hybrid_search` 取候选 `2*top_k` → reranker 精排 → 过滤低于 `similarity_threshold`（默认 0.3）的 chunk；过滤后不足 3 条时补到 3 条。
+
+### 25.4 Query 改写（none / HyDE / multi_query）
+
+[app/rag/query_rewriter.py](../app/rag/query_rewriter.py) 的 `rewrite_query` 三策略：
+
+- **none**：零 LLM 调用，直接用原 query
+- **HyDE**：LLM 生成 100~200 字"假设性答案"，用其向量替代 Query 向量做检索
+- **multi_query**：LLM 一次生成 N 个子查询，每路独立检索后 RRF 二次融合（按 chunk_id 去重 + rank-based 重算分数 `score = Σ 1/(k + rank_i)`，同 chunk 多路命中分数累加）
+
+软失败原则（与 NER 同款）：异常/超时返 noop，不阻断主链路。
+
+### 25.5 Query NER + Graph 锚定
+
+[app/rag/query_ner.py](../app/rag/query_ner.py) 薄封装 [app/kg/ner.py](../app/kg/ner.py) 的 `run_ner`，追加：
+
+- Neo4j 单跳锚定（`max_hops=1`），Semaphore(5) 限流
+- 锚定结果把**起点实体本身也加入 tags**（即使无邻居也有过滤价值）
+- UTF-8 字节安全截断（中文 3 字节/字），上限 50 标签
+- 硬超时 `query_ner_timeout_s` / `graph_anchor_timeout_s`
+
+Graph RAG 默认启用（`graph_rag_enable=True`），Query 无实体或实体不在图谱时自动短路。
+
+### 25.6 三层配置合并（API > KB > settings）
+
+[app/rag/retrieval_config.py](../app/rag/retrieval_config.py) 的 `resolve_options` 函数实现三层合并：
+
+```
+API options（QueryOptions） > kb.retrieval_config（JSONB） > 全局 settings
+```
+
+任一上层字段为 None 时回落下一层。`ResolvedRetrievalOptions` 冻结数据类包含：top_k / similarity_threshold / bm25_enable / reranker_enable / query_rewrite / enable_graph_rag / enable_faithfulness_check / rrf_k / rerank_top_n。
+
+`query_rewrite` 校验在 `resolve_options` 入口用 `BusinessError(40011)` 显式拦截，而非 Pydantic validator（避免被 `ValidationError` 重打包成 40001）。
+
+## 26. T5+T9 答案溯源与置信度（CHC）
+
+### 26.1 Citation 注入与解析
+
+[app/rag/citation.py](../app/rag/citation.py) 两个核心函数：
+
+- `build_context_with_citation(chunks)`：生成 `[1] 来源：xxx.pdf（第3页）\n内容：...` 格式的 context 文本
+- `build_citation_system_prompt()`：注入引用规则，引导 LLM 用 `[N]` 标注来源
+- `parse_citations(answer_text, chunks)`：正则 `\[(\d+)\]` 抽取引用编号 → 去重保序 → 映射回 chunks → 输出 `CitationItem`（chunk_id / document_name / page_number / heading_path / snippet / rerank_score）
+
+关键细节：Unicode 中文引号 `"` `"` 替代 ASCII 防止 SyntaxError；越界编号静默忽略（LLM 偶会编造编号）；未引用 chunk 不出现在 source_citations 中。
+
+### 26.2 置信度评分（CHC-03）
+
+[app/rag/confidence.py](../app/rag/confidence.py) 的 `compute_confidence` 纯函数，按 PRD §540 公式：
+
+```
+confidence = weighted_avg(rerank_scores of cited chunks) × coverage_factor × (1 - hallucination_penalty)
+```
+
+- `weighted_avg`：被引用 chunk 等权算术平均
+- `coverage_factor`：`len(cited) / top_k`（上限 1.0）
+- `hallucination_penalty`：自检失败比例（默认 0.0，自检关闭/失败时不惩罚）
+
+`confidence < 0.5` 时自动填 `low_confidence_warning` 预警文案。`ConfidenceScore.breakdown` 透出三因子原值便于 trace 排查。
+
+### 26.3 答案自检 LLM as Judge（CHC-04）
+
+[app/rag/faithfulness.py](../app/rag/faithfulness.py) 的 `check_faithfulness`：
+
+- LLM as Judge：提取答案中关键事实声明 → 逐一比对该声明是否在检索 chunk 中有文本支撑
+- 输出 JSON 数组 `[{"claim": "...", "status": "supported" | "unverified", "source_text": "..."}]`
+- JSON 数组/对象包装兼容（`{"claims": [...]}` 也接受）
+- `wait_for(faithfulness_check_timeout_s)` 硬超时
+- `response_format` 不强制 `json_object`（多数模型不支持 array 类型的 response_format）
+- unverified 处理：在 answer 末尾追加 `⚠ 以下事实未在检索内容中找到明确支撑：- claim1` 警告清单
+
+### 26.4 三态状态机：ok / skipped / disabled
+
+`faithfulness_check` 字段三态：
+
+- **"ok"**：自检正常跑通，返回 claims 列表
+- **"skipped"**：异常/超时/JSON 解析失败时软降级，不惩罚 confidence（`penalty=0.0`），不阻断主链路
+- **"disabled"**：`enable_faithfulness_check=False` 时不调 LLM，`_DISABLED_RESULT` 模块级常量直接返回
+
+## 27. T3+T12 可观测性 Trace
+
+### 27.1 Tracer 上下文管理器
+
+[app/observability/tracer.py](../app/observability/tracer.py) 的 `Tracer` 类：
+
+```python
+async with Tracer(session_id=sid, kb_id=kb_id) as t:
+    with t.step("query_rewrite", step_input={"query": "..."}):
+        result = await rewrite_query(query)
+    with t.step("retrieve", step_input=...):
+        results = await hybrid_search(...)
+```
+
+- `trace_id` 在入口生成（`uuid4().hex[:16]`），贯穿全链路所有 step
+- 每个 `step()` 上下文管理器自动计时（`time.perf_counter()`），记录 step_latency_ms
+- `trace_enable=False` 时所有操作短路，零开销
+- 退出 `Tracer` 上下文时批量写入 PG `agent_traces` 表
+
+### 27.2 agent_traces 表 + 嵌套 step 查询
+
+`agent_traces` 表（[app/models/agent_trace.py](../app/models/agent_trace.py)）13 字段：trace_id / session_id / kb_id / step_type / parent_step / step_latency_ms / total_latency_ms / step_input(JSONB) / step_output(JSONB) / model_name / token_count / error_message / created_at。
+
+Trace 查询端点（[app/api/v2/endpoints/traces.py](../app/api/v2/endpoints/traces.py)）：`GET /api/v2/traces/{trace_id}` + `GET /api/v2/traces/sessions/{session_id}/traces`。先查根步骤再 count 每条步骤数，避免大 join。
+
+### 27.3 query_analytics 快照表
+
+[app/models/query_analytics.py](../app/models/query_analytics.py) 14 字段：trace_id / session_id / kb_id / total_latency_ms / confidence / low_confidence / graph_rag_triggered / bm25_contributed / faithfulness_check_triggered / total_tokens / react_steps / has_error / created_at。
+
+设计决策：快照表而非实时聚合 agent_traces。agent_traces 的 step_input/step_output 是 JSONB，从中聚合指标性能差；快照表每次查询写一行扁平指标，SQL 聚合简单高效。工具使用率用 bool + AVG（`AVG(bm25_contributed)` = 触发率）。
+
+### 27.4 单 SQL 聚合统计
+
+[app/api/v2/endpoints/analytics.py](../app/api/v2/endpoints/analytics.py) 的 `GET /api/v2/analytics` 端点：
+
+- 单条 SELECT 完成所有 10 个聚合指标（COUNT / AVG / SUM / CASE WHEN）
+- 支持 `start_date` / `end_date` / `kb_id` 过滤
+- 默认 7 天时间范围
+- 响应 < 500ms
+
+[app/observability/analytics_writer.py](../app/observability/analytics_writer.py) 的 `write_analytics_snapshot` 在每次 `/v2/query` 结束时调用，从 `Tracer.steps` 提取工具使用 bool / Token 数 / 步骤数 / 错误，写入一行快照。
+
+### 27.5 关键 bugfix：writer 内部 commit
+
+v2_smoke 集成时暴露 OBS-03 快照丢失 bug：`write_analytics_snapshot` 仅 `flush` 不 `commit`，注释说"由调用方统一 commit"但调用方从未 commit → 请求结束 `AsyncSession` 关闭时隐式 rollback → 数据永远不落库。
+
+修复：writer 内部独立 `commit()` + `rollback()` 兜底，符合项目惯例（chat/kb/session/file/evaluations 14 处全显式 commit）。commit 失败仍走 try/except warning 不阻断主链路。
+
+## 28. T6+T10 统一查询接口（UQA）
+
+### 28.1 /v2/query 主链路（7 步 trace）
+
+[app/api/v2/endpoints/query.py](../app/api/v2/endpoints/query.py) 的 `v2_query` 端点串联完整链路，`Tracer` 包裹 7 步自动计时埋点：
+
+```
+1. query_rewrite   → rewrite_query(query, resolved.query_rewrite)
+2. query_ner       → extract_query_entities(query)
+3. graph_anchor    → anchor_to_graph(entities, kb_ids)
+4. retrieve        → hybrid_search(text, top_k, entity_tags, ...)
+5. build_context   → build_context_with_citation(results)
+6. generate        → litellm.acompletion(context + system prompt)
+7. citation_parse  → parse_citations(answer, chunks)
+   （T9 追加）faithfulness_check + compute_confidence
+```
+
+`top_k` 放在 `QueryOptions` 嵌套字段而非顶层，便于未来扩展 stream / reranker_enable / bm25_enable 等。总耗时取整 ms。
+
+### 28.2 检索空兜底 + LLM 失败兜底 + 整体超时
+
+三类兜底保证 API 稳定性：
+
+1. **检索为空**：不调 LLM，直接返回友好文案 + `confidence=0.0` + `trace_id` 透传
+2. **LLM 失败**：返回 `（回答生成失败）` + `faithfulness_check="skipped"`
+3. **整体超时**：`asyncio.wait_for(timeout=settings.query_total_timeout_s)` 硬超时兜底（默认 120s）
+
+三层超时防护：LiteLLM 内部 timeout → `asyncio.wait_for` 步骤级硬超时 → `v2_query` 整体硬超时。任一层触发均有友好文案返回，不无限挂起。
+
+### 28.3 三个分层子接口：/retrieve、/generate、/rerank
+
+[progress.md T10](progress.md#t10--分层子接口-2026-06-16) 详细记录了三个子接口的独立 Schema 与端点实现：
+
+- **`POST /api/v2/retrieve`**（[app/api/v2/endpoints/retrieve.py](../app/api/v2/endpoints/retrieve.py)）：纯检索，不调 LLM。返回 chunks 含 vector_score / bm25_score / rrf_score / rerank_score 四个分数字段。延迟目标 < 1s。
+- **`POST /api/v2/generate`**（[app/api/v2/endpoints/generate.py](../app/api/v2/endpoints/generate.py)）：开发者传入自定义 context，跳过检索，只走 LLM + Citation + 自检 + 置信度。不触发 Milvus/Neo4j。`context_chunks` 至少 1 条，否则返 42201。
+- **`POST /api/v2/rerank`**（[app/api/v2/endpoints/rerank.py](../app/api/v2/endpoints/rerank.py)）：query + candidates → rerank_score 降序。降级返回原顺序（score=0.0）。独立复用 Hermes 的 Reranker 能力。
+
+三个子接口完全独立端点 + Schema，不复用 /v2/query 的 QueryRequest/QueryResponse，因为语义差异大。
+
+## 29. T11 RAGAS 评估管道（EVA）
+
+### 29.1 worker 进程内 import 而非 HTTP 调
+
+[app/rag/eval_runner.py](../app/rag/eval_runner.py) 的 `run_single_query_for_eval` 直接 import `hybrid_search` / `generate_answer` 等内部函数，零网络依赖。评估 worker（Celery 子进程）与 uvicorn 不在同一进程，httpx 调用要求 worker 能解析到 host:port，部署复杂。
+
+关键约束：不写 Trace（评估场景每题写 ~7 条 step 会污染 agent_traces 表）；不调 `faithfulness_check`（ragas 自身会算 faithfulness 指标）；multi_query 评估期禁用（每题烧 2~4 次 LLM 改写 token，性价比差）。
+
+### 29.2 LiteLLM 经 LangChain ChatOpenAI(base_url=) 适配 ragas
+
+[app/rag/ragas_evaluator.py](../app/rag/ragas_evaluator.py) 的 `evaluate_with_ragas`：
+
+- LLM 适配：`LangchainLLMWrapper(ChatOpenAI(model=..., base_url=..., api_key=...))`，LiteLLM 完全兼容 OpenAI 协议
+- Embedding 适配：`LangchainEmbeddingsWrapper(OpenAIEmbeddings(model=..., base_url=...))`
+- 剥掉厂商前缀（`deepseek/deepseek-v4-flash` → `deepseek-v4-flash`），ChatOpenAI 不需要 LiteLLM 的 `/` 前缀路由
+
+4 项核心指标（faithfulness / answer_relevancy / context_precision / context_recall），`overall_score` 为算术均值。
+
+### 29.3 软失败设计（ragas 不可用 → summary 全 None）
+
+- **ragas 模块懒加载**：`from ragas import evaluate` 推迟到 `evaluate_with_ragas` 函数内；环境无 ragas → 整批返 summary 全 None + error 字段，不阻断 EvalTask 落库
+- **NaN / Inf → None**：单题失败返 NaN，用 `_to_float_or_none` 清洗后写 JSONB，避免 PG 序列化 NaN 报错
+- **eval_dataset 完整存 JSONB**：question + ground_truth 原样保留；评估期生成的 answer + contexts 也写入 `eval_result.samples`，便于复跑指标
+- **超 100 题硬拒绝**：返 40013，保留 `EVAL_MAX_QUESTIONS` 配置可调（最大 500）
+
+A.1 实验验证了 4 组对比（baseline / thresh_0.3 / thresh_0.1 / thresh_0.0），详见 [eval_a1_reranker_tuning.md](eval_a1_reranker_tuning.md)。
+
+## 30. V2.0 关键技术决策汇总
+
+### 30.1 与 V1.5 不同的工程决策
+
+| 决策点 | 选择 | 替代方案 | 理由 |
+|--------|------|----------|------|
+| BM25 方案 | Milvus 内置 Function | jieba 手动分词 + 稀疏向量 | 零编码，插入自动分词，查询传原文本 |
+| RRF 融合 | Milvus `AnnSearchRequest` + `RRFRanker` | 应用层排序融合 | 双路一次性查询，Milvus 内部融合更高效 |
+| Reranker | NoopReranker 生产态（score=1.0） | Qwen3-Reranker-8B | A.1 实验表明当前 Reranker 弊大于利（overall -0.231） |
+| Query 改写校验 | `resolve_options` 入口拦截 | Pydantic field_validator | 避免被 ValidationError 重打包成 40001 |
+| 三类 chunk 索引 | 全局连续递增 | 各自从 0 开始 | 幂等 upsert 不冲突，`_make_chunk_id_int` 统一管理 |
+| Trace 写入 | 同步短连接（T3），T12 仍同步 | 异步写入 Redis 队列 | V2 阶段简化，写入失败仅 warning 不阻塞主链路 |
+| 快照表 | query_analytics 扁平表 | 实时聚合 agent_traces JSONB | SQL 聚合简单高效，每次查询写一行 |
+| RAGAS 集成 | worker 进程内 import | HTTP 调用 /v2/query | 零网络依赖，部署简单 |
+| 整体超时 | `asyncio.wait_for` 硬超时 | 仅靠 LiteLLM timeout | 三层防护：LLM 层 → 步骤层 → 请求层 |
+| 答案自检三态 | ok / skipped / disabled | 仅 bool | 区分"用户没启用" vs "启用了但失败" |
+| Milvus 同步调用 | `asyncio.to_thread` 包 gRPC | 直接同步调用 | 防止阻塞事件循环影响其他并发请求 |
+| NER 仅对 fine chunks | 表格描述/粗摘要跳过 | 全部跑 NER | 二次合成文本不应抽新实体；补空 entities 对齐 |
+
+### 30.2 已知限制 / 后续可改进
+
+- **Reranker 选型待定**：A.1 实验 Qwen3-Reranker-8B 结果不理想（overall 比 baseline 低 0.100~0.288），当前 `RERANKER_TYPE=none`。后续应测试 bge-reranker-v2-m3 或在文档量增大后重测
+- **多 KB 检索取第一个 KB 的 retrieval_config**：本期限制；后续可演进为 union/优先级/fan-out 策略
+- **评估期禁用 multi_query**：多路改写烧 token 且无性价比，但长远看应支持可选启用
+- **query_analytics 简化 Token 统计**：仅记录 total_tokens，不区分 input/output；PRD 要求 total_input / total_output 分开统计
+- **Milvus 同步 gRPC 阻塞事件循环**：虽已用 `asyncio.to_thread` 包装，但理想方案应换异步 gRPC 客户端
+- **agent_traces 无数据保留策略**：当前无自动清理机制，大量查询后表体积会持续增长
+- **Graph RAG 锚定仅单跳**：`max_hops=1` 防止图谱爆炸；复杂多跳场景需单独调优
+- **Embedding 模型固定 4096 维**：换模型需重建 Collection，成本较高
