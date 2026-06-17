@@ -115,7 +115,8 @@ async def write_analytics_snapshot(
     """构建并写入一行 query_analytics 快照。
 
     写入失败仅 warning，不阻断主链路。
-    只 flush 不 commit，由调用方统一 commit。
+    内部独立 commit：analytics 是单一职责的快照写入，自管事务边界，
+    避免依赖调用方记得 commit（FastAPI get_db_session 不做 auto-commit）。
     """
     try:
         data = build_analytics_snapshot(
@@ -129,10 +130,14 @@ async def write_analytics_snapshot(
         )
         row = QueryAnalytics(**data)
         db.add(row)
-        await db.flush()
-        # 注意：不 commit，由调用方统一 commit
+        await db.commit()
     except Exception as e:
         logger.warning("Analytics 快照写入失败（已忽略）: %s", e)
+        # 失败时回滚，避免 session 处于损坏状态影响后续操作
+        try:
+            await db.rollback()
+        except Exception:
+            pass
 
 
 __all__ = ["build_analytics_snapshot", "write_analytics_snapshot"]
