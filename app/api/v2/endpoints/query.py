@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db
 from app.agent.context import reset_current_kb_ids, set_current_kb_ids
+from app.core.async_utils import gather_with_timeout
 from app.core.config import get_settings
 from app.models.knowledge_base import KnowledgeBase
 from app.observability.tracer import Tracer
@@ -375,7 +376,17 @@ async def _multi_query_search(
                       similarity_threshold=similarity_threshold)
         for q in queries
     ]
-    raw = await asyncio.gather(*coros, return_exceptions=True)
+    settings = get_settings()
+    try:
+        raw = await gather_with_timeout(
+            coros,
+            timeout_s=min(settings.query_total_timeout_s, max(10.0, len(coros) * 15.0)),
+            label="v2_multi_query_search",
+            return_exceptions=True,
+        )
+    except asyncio.TimeoutError:
+        logger.warning("multi_query 整组检索超时（软降级为空结果） queries=%d", len(queries))
+        return []
 
     # RRF 累加：score(c) = Σ 1/(k + rank_i(c))
     rrf_scores: dict[int, float] = {}

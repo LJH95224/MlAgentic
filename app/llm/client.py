@@ -16,6 +16,7 @@
    处理标准 JSON 结构，零感知 LiteLLM 内部类型。
 """
 
+import asyncio
 import logging
 import time
 from collections.abc import AsyncIterator
@@ -143,12 +144,16 @@ async def acompletion(
         ValueError: LITELLM_MODEL 未配置
         litellm.*:   LiteLLM 底层异常（超时、认证失败、限流等）
     """
+    settings = get_settings()
     kwargs = _build_kwargs(messages, tools, **extra)
 
     t0 = time.perf_counter()
     logger.info("LLM 请求: model=%s messages=%d tools=%s", kwargs["model"], len(messages), "yes" if tools else "no")
 
-    resp = await litellm.acompletion(**kwargs)
+    resp = await asyncio.wait_for(
+        litellm.acompletion(**kwargs),
+        timeout=settings.litellm_timeout * 1.2,
+    )
 
     elapsed = time.perf_counter() - t0
     result = _to_dict(resp)
@@ -188,12 +193,25 @@ async def astream(
 
     3.3 阶段 LangGraph 的 ReAct 循环会通过此接口获取打字机式文本流。
     """
+    settings = get_settings()
     kwargs = _build_kwargs(messages, tools, **extra, stream=True)
 
     logger.info("LLM 流式请求: model=%s messages=%d tools=%s", kwargs["model"], len(messages), "yes" if tools else "no")
     t0 = time.perf_counter()
 
-    async for chunk in await litellm.acompletion(**kwargs):
+    stream = await asyncio.wait_for(
+        litellm.acompletion(**kwargs),
+        timeout=settings.litellm_timeout * 1.2,
+    )
+    iterator = stream.__aiter__()
+    while True:
+        try:
+            chunk = await asyncio.wait_for(
+                anext(iterator),
+                timeout=settings.litellm_timeout * 1.2,
+            )
+        except StopAsyncIteration:
+            break
         yield _to_dict(chunk)
 
     elapsed = time.perf_counter() - t0

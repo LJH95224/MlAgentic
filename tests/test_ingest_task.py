@@ -315,12 +315,14 @@ async def test_main_empty_text_raises_parse_error(
         await ingest_task._main(str(file_id), str(kb_id))
 
 
-async def test_main_neo4j_failure_is_soft(patched_resources, patched_pipeline):
-    """Neo4j 写入失败 → 整体仍 completed，entity_count=0（软失败）。"""
+async def test_main_neo4j_failure_is_soft(patched_resources, patched_pipeline, monkeypatch):
+    """Neo4j 写入失败 → 整体仍 completed，并记录降级标记。"""
     mock_resources, mock_db, mock_result = patched_resources
 
     # 让 neo4j session.run 抛错
     mock_resources.neo4j.session().run.side_effect = RuntimeError("neo4j down")
+    degraded_mock = AsyncMock()
+    monkeypatch.setattr(ingest_task, "_mark_neo4j_degraded", degraded_mock)
 
     file_id = uuid.uuid4()
     kb_id = uuid.uuid4()
@@ -331,8 +333,46 @@ async def test_main_neo4j_failure_is_soft(patched_resources, patched_pipeline):
     result = await ingest_task._main(str(file_id), str(kb_id))
     # 主链路完成
     assert result["status"] == FILE_STATUS_COMPLETED
-    # Neo4j 失败 → entity_count 回退 0
+    # Neo4j 失败 → entity_count 回退 0，并额外写入降级元数据
     assert result["entity_count"] == 0
+    degraded_mock.assert_awaited_once()
+
+
+async def test_mark_failed_safe_cleans_cross_store_residue(monkeypatch):
+    """失败标记路径会尽力清理 Milvus / Neo4j 残留，避免数据孤岛。"""
+    cleanup_milvus = AsyncMock()
+    cleanup_neo4j = AsyncMock()
+    monkeypatch.setattr(ingest_task, "_cleanup_milvus_chunks_for_file", cleanup_milvus)
+    monkeypatch.setattr(ingest_task, "_cleanup_neo4j_document_for_file", cleanup_neo4j)
+
+    from contextlib import asynccontextmanager
+
+    mock_db_session = MagicMock()
+    mock_db_session.execute = AsyncMock()
+    mock_db_session.commit = AsyncMock()
+    mock_resources = MagicMock()
+
+    @asynccontextmanager
+    async def _db_factory():
+        yield mock_db_session
+
+    mock_resources.db = _db_factory
+
+    @asynccontextmanager
+    async def _fake_task_resources():
+        yield mock_resources
+
+    monkeypatch.setattr(ingest_task, "task_resources", _fake_task_resources)
+
+    file_id = uuid.uuid4()
+    kb_id = uuid.uuid4()
+    await ingest_task._mark_failed_safe(
+        str(file_id), kb_id=str(kb_id), error_message="RuntimeError: db down"
+    )
+
+    cleanup_milvus.assert_awaited_once_with(mock_resources, kb_id, file_id)
+    cleanup_neo4j.assert_awaited_once_with(mock_resources, kb_id, file_id)
+    mock_db_session.commit.assert_awaited_once()
 
 
 # ──────────────── Celery task 入口 ────────────────
@@ -373,7 +413,7 @@ def test_task_eager_unretryable_failure_marks_failed(monkeypatch, patched_resour
     # mock 掉 _mark_failed_safe，避免再走一次 task_resources（已被 mock 了，能跑通，
     # 但 _mark_failed_safe 内部新建 task_resources 上下文管理器调用次数难追，
     # 直接 stub 更清晰）
-    async def _noop_mark(file_id, *, error_message):
+    async def _noop_mark(file_id, *, kb_id, error_message):
         return None
 
     monkeypatch.setattr(ingest_task, "_mark_failed_safe", _noop_mark)

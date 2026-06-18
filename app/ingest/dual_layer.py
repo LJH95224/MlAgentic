@@ -28,6 +28,7 @@ from typing import Any
 
 import litellm
 
+from app.core.async_utils import gather_with_timeout
 from app.core.config import get_settings
 from app.ingest.structured_splitter import StructuredChunk
 from app.ingest.table_description import _resolve_idp_kwargs, _truncate_utf8
@@ -220,7 +221,16 @@ async def generate_coarse_chunks(
         )
         for indices in groups
     ]
-    results = await asyncio.gather(*coros, return_exceptions=True)
+    try:
+        results = await gather_with_timeout(
+            coros,
+            timeout_s=max(timeout + 5, len(coros) * timeout / concurrency + 5),
+            label="idp_dual_layer",
+            return_exceptions=True,
+        )
+    except asyncio.TimeoutError:
+        logger.warning("IDP-04 双层索引整组超时（软失败），跳过粗粒度生成 groups=%d", len(groups))
+        return []
 
     coarse: list[CoarseChunk] = []
     for r in results:

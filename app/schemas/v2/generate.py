@@ -34,7 +34,7 @@ class GenerateRequest(BaseModel):
 
     query: str = Field(..., min_length=1, max_length=2000, description="查询文本")
     context_chunks: list[ContextChunk] = Field(
-        ..., min_length=1,
+        default_factory=list,
         description="自定义上下文块列表（至少 1 条）",
     )
     options: GenerateOptions = Field(default_factory=GenerateOptions, description="生成选项")

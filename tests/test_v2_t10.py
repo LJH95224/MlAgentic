@@ -100,10 +100,11 @@ class TestGenerateSchema:
         assert len(req.context_chunks) == 1
         assert req.options.enable_citation is True
 
-    def test_generate_request_empty_context_fails(self):
+    def test_generate_request_empty_context_allowed_for_endpoint_error_code(self):
+        """空 context 允许通过 Schema，交给 endpoint 返回 42201 业务码。"""
         from app.schemas.v2.generate import GenerateRequest
-        with pytest.raises(Exception):
-            GenerateRequest(query="测试", context_chunks=[])
+        req = GenerateRequest(query="测试", context_chunks=[])
+        assert req.context_chunks == []
 
     def test_context_chunk_source_label(self):
         from app.schemas.v2.generate import ContextChunk
@@ -378,11 +379,17 @@ class TestGenerateEndpoint:
             assert "违约金" in resp.answer
 
     @pytest.mark.asyncio
-    async def test_generate_empty_context_raises(self):
-        """context_chunks 为空时 Pydantic 校验拒绝。"""
+    async def test_generate_empty_context_raises_business_error(self):
+        """context_chunks 为空时 endpoint 返回 42201 业务错误。"""
+        from app.api import error_codes
+        from app.api.exceptions import BusinessError
+        from app.api.v2.endpoints.generate import v2_generate
         from app.schemas.v2.generate import GenerateRequest
-        with pytest.raises(Exception):
-            GenerateRequest(query="测试", context_chunks=[])
+
+        body = GenerateRequest(query="测试", context_chunks=[])
+        with pytest.raises(BusinessError) as exc_info:
+            await v2_generate(body, db=MagicMock())
+        assert exc_info.value.code == error_codes.CONTEXT_CHUNKS_EMPTY
 
     @pytest.mark.asyncio
     async def test_generate_no_milvus_neo4j(self):

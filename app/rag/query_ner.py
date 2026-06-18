@@ -21,6 +21,7 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING
 
+from app.core.async_utils import gather_with_timeout
 from app.core.config import get_settings
 from app.kg.ner import run_ner
 from app.kg.neo4j_client import get_neo4j_driver
@@ -188,8 +189,17 @@ async def anchor_to_graph(
     if not coros:
         return []
 
-    # gather 所有实体的邻接结果；单实体已自捕获，return_exceptions=True 仅作终极兜底
-    results = await asyncio.gather(*coros, return_exceptions=True)
+    # gather 所有实体的邻接结果；单实体已自捕获，外层再加整组硬超时兜底
+    try:
+        results = await gather_with_timeout(
+            coros,
+            timeout_s=max(timeout + 5, len(coros) * timeout / _NEO4J_CONCURRENCY + 5),
+            label="query_graph_anchor",
+            return_exceptions=True,
+        )
+    except asyncio.TimeoutError:
+        logger.warning("图谱锚定整组超时（已忽略） entity_count=%d", len(coros))
+        return []
 
     # 仅收集 Neo4j 真正命中的标签（_anchor_one_entity 内部已含起点实体 name）。
     # 不再强行把"NER 抽出但图谱里不存在"的实体加入 tags ——否则会导致

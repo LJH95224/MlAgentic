@@ -23,6 +23,7 @@ from typing import Any
 
 import litellm
 
+from app.core.async_utils import wait_for_named
 from app.core.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -154,7 +155,12 @@ async def run_ner(text: str) -> list[dict]:
         return []
 
     try:
-        resp = await litellm.acompletion(**kwargs)
+        settings = get_settings()
+        resp = await wait_for_named(
+            litellm.acompletion(**kwargs),
+            timeout_s=settings.litellm_timeout * 1.2,
+            label="kg_ner_llm",
+        )
         # 兼容 Pydantic 对象与裸 dict（与 chat client 同样的处理思路）
         if hasattr(resp, "model_dump"):
             resp_dict = resp.model_dump()

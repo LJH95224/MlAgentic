@@ -229,7 +229,7 @@ class TestAnalyticsEndpoint:
     @pytest.mark.asyncio
     async def test_analytics_returns_stats(self):
         """正常返回聚合统计数据。"""
-        from app.api.v2.endpoints.analytics import v2_analytics
+        from app.api.v2.endpoints.analytics import _build_analytics_response
 
         mock_db = MagicMock()
         mock_row = MagicMock()
@@ -248,7 +248,7 @@ class TestAnalyticsEndpoint:
         mock_result.first.return_value = mock_row
         mock_db.execute = AsyncMock(return_value=mock_result)
 
-        resp = await v2_analytics(
+        resp = await _build_analytics_response(
             start_date=date(2026, 6, 9),
             end_date=date(2026, 6, 16),
             kb_id=None,
@@ -261,7 +261,7 @@ class TestAnalyticsEndpoint:
     @pytest.mark.asyncio
     async def test_analytics_empty_data(self):
         """无数据时返回零值默认。"""
-        from app.api.v2.endpoints.analytics import v2_analytics
+        from app.api.v2.endpoints.analytics import _build_analytics_response
 
         mock_db = MagicMock()
         mock_row = MagicMock()
@@ -280,7 +280,7 @@ class TestAnalyticsEndpoint:
         mock_result.first.return_value = mock_row
         mock_db.execute = AsyncMock(return_value=mock_result)
 
-        resp = await v2_analytics(
+        resp = await _build_analytics_response(
             start_date=date(2026, 6, 9),
             end_date=date(2026, 6, 16),
             kb_id=None,
@@ -288,6 +288,29 @@ class TestAnalyticsEndpoint:
         )
         assert resp.total_queries == 0
         assert resp.avg_latency_ms is None
+
+    @pytest.mark.asyncio
+    async def test_analytics_endpoint_wraps_api_response(self):
+        """HTTP endpoint 返回 ApiResponse 包装，符合 V2 REST 统一响应契约。"""
+        from app.api.v2.endpoints.analytics import v2_analytics
+
+        mock_db = MagicMock()
+        mock_row = MagicMock()
+        mock_row.total_queries = 0
+        mock_result = MagicMock()
+        mock_result.first.return_value = mock_row
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        resp = await v2_analytics(
+            start_date=date(2026, 6, 9),
+            end_date=date(2026, 6, 16),
+            kb_id=None,
+            db=mock_db,
+        )
+        assert resp.code == 0
+        assert resp.message == "success"
+        assert resp.data is not None
+        assert resp.data.total_queries == 0
 
     def test_analytics_router_registered(self):
         """验证 /analytics 路由已注册。"""

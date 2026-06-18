@@ -11,7 +11,10 @@
 import os
 from unittest.mock import MagicMock, patch
 
+import pytest
 from pymilvus import DataType
+
+from tests.conftest import skip_without_db
 
 
 # ─────────── 工具函数 ───────────
@@ -378,6 +381,125 @@ class TestKBV2Extensions:
         # summary_brief
         assert cols["summary_brief"].type.python_type in (str, type(None))
         assert cols["summary_brief"].nullable is True
+
+    def test_legacy_v1_5_tables_generate_v2_compat_alter_sql(self):
+        """旧 V1.5 PG 表缺 V2 字段时，启动期兼容迁移应补齐列。
+
+        真实故障表现：/api/v1/knowledge-bases 列表查询 ORM 全字段时，
+        旧库缺 retrieval_config / doc_metadata_schema 会触发 UndefinedColumn → 500。
+        """
+        from app.main import _build_v2_compat_alter_sql
+
+        existing = {
+            "knowledge_bases": {"id", "name", "description"},
+            "kb_files": {"id", "kb_id", "filename"},
+        }
+
+        sql = _build_v2_compat_alter_sql(existing)
+
+        assert (
+            "ALTER TABLE knowledge_bases "
+            "ADD COLUMN IF NOT EXISTS retrieval_config JSONB"
+        ) in sql
+        assert (
+            "ALTER TABLE knowledge_bases "
+            "ADD COLUMN IF NOT EXISTS doc_metadata_schema JSONB"
+        ) in sql
+        assert "ALTER TABLE kb_files ADD COLUMN IF NOT EXISTS doc_metadata JSONB" in sql
+        assert "ALTER TABLE kb_files ADD COLUMN IF NOT EXISTS summary_brief TEXT" in sql
+
+    def test_existing_v2_columns_do_not_generate_alter_sql(self):
+        """已是 V2 表结构时，兼容迁移必须幂等不执行 ALTER。"""
+        from app.main import _build_v2_compat_alter_sql
+
+        existing = {
+            "knowledge_bases": {"retrieval_config", "doc_metadata_schema"},
+            "kb_files": {"doc_metadata", "summary_brief"},
+        }
+
+        assert _build_v2_compat_alter_sql(existing) == []
+
+
+@skip_without_db
+@pytest.mark.asyncio
+async def test_v2_compat_migration_allows_orm_query_on_legacy_v1_5_tables():
+    """V1.5 旧表升级后，列表查询所需 ORM SELECT 不应再因缺列失败。"""
+    import uuid
+
+    from sqlalchemy import select, text
+
+    from app.db.session import engine
+    from app.main import _ensure_v2_compat_columns
+    from app.models.knowledge_base import KnowledgeBase
+
+    from app.models.base import Base
+
+    kb_id = uuid.uuid4()
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(text("DROP TABLE IF EXISTS kb_files"))
+            await conn.execute(text("DROP TABLE IF EXISTS knowledge_bases"))
+            await conn.execute(
+                text(
+                    """
+                    CREATE TABLE knowledge_bases (
+                        id UUID PRIMARY KEY,
+                        name VARCHAR(128) NOT NULL UNIQUE,
+                        description TEXT,
+                        embedding_dim INTEGER NOT NULL DEFAULT 4096,
+                        chunk_size INTEGER NOT NULL DEFAULT 512,
+                        chunk_overlap INTEGER NOT NULL DEFAULT 64,
+                        status VARCHAR(20) NOT NULL DEFAULT 'active',
+                        file_count INTEGER NOT NULL DEFAULT 0,
+                        chunk_count INTEGER NOT NULL DEFAULT 0,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                    )
+                    """
+                )
+            )
+            await conn.execute(
+                text(
+                    """
+                    CREATE TABLE kb_files (
+                        id UUID PRIMARY KEY,
+                        kb_id UUID NOT NULL REFERENCES knowledge_bases(id) ON DELETE CASCADE,
+                        filename VARCHAR(512) NOT NULL,
+                        file_path VARCHAR(1024) NOT NULL,
+                        file_size BIGINT NOT NULL,
+                        mime_type VARCHAR(128) NOT NULL,
+                        status VARCHAR(20) NOT NULL DEFAULT 'pending',
+                        progress INTEGER NOT NULL DEFAULT 0,
+                        chunk_count INTEGER NOT NULL DEFAULT 0,
+                        entity_count INTEGER NOT NULL DEFAULT 0,
+                        error_message TEXT,
+                        celery_task_id VARCHAR(255),
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                        completed_at TIMESTAMPTZ
+                    )
+                    """
+                )
+            )
+            await conn.execute(
+                text("INSERT INTO knowledge_bases (id, name) VALUES (:id, :name)"),
+                {"id": kb_id, "name": "旧库兼容测试"},
+            )
+
+        await _ensure_v2_compat_columns()
+
+        async with engine.begin() as conn:
+            row = (
+                await conn.execute(
+                    select(KnowledgeBase).where(KnowledgeBase.id == kb_id)
+                )
+            ).scalar_one()
+            assert row.name == "旧库兼容测试"
+            assert row.retrieval_config is None
+            assert row.doc_metadata_schema is None
+    finally:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.drop_all)
+            await conn.run_sync(Base.metadata.create_all)
+        await engine.dispose()
 
 
 # ════════════════════════════════════════════════════════════════

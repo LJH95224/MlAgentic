@@ -23,6 +23,7 @@ from typing import Any
 
 import litellm
 
+from app.core.async_utils import gather_with_timeout
 from app.core.config import get_settings
 from app.ingest.structured_splitter import StructuredChunk
 
@@ -192,7 +193,16 @@ async def generate_table_descriptions(
         )
         for i in table_indices
     ]
-    results = await asyncio.gather(*coros, return_exceptions=True)
+    try:
+        results = await gather_with_timeout(
+            coros,
+            timeout_s=max(timeout + 5, len(coros) * timeout / concurrency + 5),
+            label="idp_table_description",
+            return_exceptions=True,
+        )
+    except asyncio.TimeoutError:
+        logger.warning("IDP-03 表格描述整组超时（软失败），跳过本步 total_tables=%d", len(table_indices))
+        return []
 
     descriptions: list[TableDescription] = []
     for r in results:

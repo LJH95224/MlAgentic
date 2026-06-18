@@ -246,6 +246,8 @@ def kb_collection_exists(kb_id: uuid.UUID | str) -> bool:
 def create_v2_kb_collection(
     kb_id: uuid.UUID | str,
     dim: int | None = None,
+    *,
+    client: "MilvusClient | None" = None,
 ) -> str:
     """为指定知识库创建 V2.0 版 Milvus Collection（T0.3）。
 
@@ -264,6 +266,7 @@ def create_v2_kb_collection(
     Args:
         kb_id: 知识库 UUID
         dim: 向量维度；缺省使用 settings.embedding_dimension
+        client: 可选的显式 MilvusClient。Celery 任务内传入任务级 client，避免替换模块级单例。
 
     Returns:
         Collection 名（形如 "kb_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"）
@@ -271,7 +274,7 @@ def create_v2_kb_collection(
     Raises:
         RuntimeError: Milvus 未初始化 / 建 Collection 失败
     """
-    client = get_milvus_client()
+    client = client or get_milvus_client()
     settings = get_settings()
     effective_dim = dim if dim is not None else settings.embedding_dimension
 

@@ -107,6 +107,7 @@
 - ✅ T0 单测 **52/52 通过**
 - ✅ V1.5 全量回归 **472 passed + 6 skipped**（420 → 472，零回归）
 - ✅ 集成验证（2026-06-17 v2_smoke）：uvicorn 启动看到 "数据库表初始化完成"，新表（agent_traces / eval_tasks / query_analytics）已建
+- ✅ Bugfix（2026-06-17）：启动期新增 V2 兼容补列迁移，旧 V1.5 PG 表缺 `retrieval_config` / `doc_metadata_schema` / `doc_metadata` / `summary_brief` 时自动 `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`，避免 `/api/v1/knowledge-bases` ORM 列表查询因 UndefinedColumn 返回 500
 
 ### T1 · 智能文档处理 ✅（2026-06-12）
 
@@ -476,6 +477,36 @@
 
 - ✅ V2 全套单测 **253/253 通过**（T0~T9 + P1，零回归）
 - ✅ 集成验证：POST `/api/v2/query` enable_graph_rag=False → 2s 返回；enable_graph_rag=True → 5s 返回；v2_smoke.py 全链路通过
+
+### Hardening · 审查报告 A/B 第一批修复 🔧（2026-06-18）
+
+> 输入来源：[docs/0617/code_quality_review_2026-06-17.md](0617/code_quality_review_2026-06-17.md) 与 [docs/0617/codex-review.md](0617/codex-review.md)。执行清单沉淀到 [docs/0617/xiugai.md](0617/xiugai.md)。
+
+#### 交付内容
+
+| 审查项 | 实现位置 | 修复内容 |
+|---|---|---|
+| A P0-2 | [app/tasks/ingest_task.py](../app/tasks/ingest_task.py) | Neo4j 写入软失败时保留 completed 主状态，但写入 `kb_files.doc_metadata._ingest_warnings.neo4j_failed=True`、错误类型、错误摘要与时间戳，区分“无实体”和“图谱写入失败” |
+| A P0-3 | [app/tasks/ingest_task.py](../app/tasks/ingest_task.py) | `_mark_failed_safe()` 在标记 failed 前尽力按 file_id 清理任务级 Milvus chunks 与 Neo4j Document，降低 Milvus 写入后 PG 失败造成永久孤岛的概率 |
+| A P0-4 / P1-5 | [app/core/async_utils.py](../app/core/async_utils.py)、[app/api/v2/endpoints/query.py](../app/api/v2/endpoints/query.py)、[app/rag/query_ner.py](../app/rag/query_ner.py)、[app/ingest/table_description.py](../app/ingest/table_description.py)、[app/ingest/dual_layer.py](../app/ingest/dual_layer.py)、[app/tasks/ingest_task.py](../app/tasks/ingest_task.py) | 新增 `wait_for_named()` / `gather_with_timeout()`；5 个生产 `asyncio.gather` 调用点增加整组硬超时，并在 IDP / NER / graph anchor / multi_query 场景保持软降级语义 |
+| A P1-6 | [app/tasks/ingest_task.py](../app/tasks/ingest_task.py) | Step 8 Milvus 同步 gRPC 写入改为 `asyncio.to_thread()`，避免大文件入库阻塞事件循环 |
+| A P1-7 | [app/tasks/session_task.py](../app/tasks/session_task.py)、[app/kg/ner.py](../app/kg/ner.py)、[app/llm/client.py](../app/llm/client.py) | 标题/摘要任务、KG NER、统一 LLM client 的 `acompletion`/`astream` 增加外层 `asyncio.wait_for`；流式输出对首包和每个 chunk 都做硬超时保护 |
+| A P1-10 | [app/rag/milvus_client.py](../app/rag/milvus_client.py)、[app/tasks/ingest_task.py](../app/tasks/ingest_task.py) | `create_v2_kb_collection(..., client=...)` 支持显式任务级 MilvusClient，移除入库自愈时临时替换模块级 `_client` 的共享状态风险 |
+| B H-01 / H-06 / H-07 | [app/rag/reranker.py](../app/rag/reranker.py)、[app/api/v2/endpoints/traces.py](../app/api/v2/endpoints/traces.py)、[app/rag/retriever.py](../app/rag/retriever.py) | 沿用 batch1 已完成修复：NoopReranker 保留原始 score；trace 不存在走 BusinessError；Milvus filter 字符串转义 |
+| 本地联调发现 | [app/api/v2/endpoints/analytics.py](../app/api/v2/endpoints/analytics.py)、[app/schemas/v2/generate.py](../app/schemas/v2/generate.py) | `/api/v2/analytics` 改为 `ApiResponse[AnalyticsResponse]` 统一包装；`/api/v2/generate` 空 `context_chunks` 改由 endpoint 返回 `42201 CONTEXT_CHUNKS_EMPTY`，避免被 Pydantic 先拦截成通用 `40001` |
+
+#### 关键设计决策
+
+1. **软失败仍保持业务可用，但必须可观测**：Neo4j 写入失败不阻断 Milvus 主链路，但通过 `_ingest_warnings` 标记降级，前端/运维可提示“图谱未完成”。
+2. **失败补偿采用尽力清理**：跨 PG / Milvus / Neo4j 无分布式事务，失败路径只做幂等 best-effort cleanup；清理失败写 warning，不覆盖原始失败状态。
+3. **整组超时不改变既有软降级契约**：IDP 表格描述、双层索引、NER、图谱锚定超时后返回空产物；multi_query 整组超时返回空检索结果，由上层沿用检索为空兜底。
+4. **任务级 MilvusClient 不再污染全局单例**：FastAPI lifespan 全局 client 与 Celery task_resources client 分离，V2 Collection 自愈通过显式参数传递。
+
+#### 验证状态
+
+- ✅ 语法级验证：`python -m compileall app/core/async_utils.py app/tasks/ingest_task.py app/ingest/dual_layer.py app/ingest/table_description.py app/rag/query_ner.py app/api/v2/endpoints/query.py app/tasks/session_task.py app/kg/ner.py app/llm/client.py app/rag/milvus_client.py tests/test_async_utils.py tests/test_ingest_task.py tests/test_rag_retriever.py tests/test_v2_p1.py tests/test_v2_t3.py tests/test_v2_t0.py` 通过；追加 `python -m compileall app/api/v2/endpoints/analytics.py app/schemas/v2/generate.py tests/test_v2_t10.py tests/test_v2_t12.py` 通过。
+- ✅ 本地服务轻量复测：`GET /health`、`OPTIONS /api/v2/query` CORS、`POST /api/v2/query` 非法 query_rewrite、`GET /api/v2/traces/not-exist-trace-id`、`GET /api/v1/knowledge-bases` 均通过；追加复测确认 `GET /api/v2/analytics` 返回 `code=0/message=success/data` 包装，`POST /api/v2/generate` 空/缺省 `context_chunks` 均返回 HTTP 422 + 业务码 `42201`。
+- ✅ 用户手动回归：`pytest tests/test_async_utils.py tests/test_ingest_task.py tests/test_rag_retriever.py tests/test_v2_p1.py tests/test_v2_t3.py tests/test_v2_t0.py tests/test_v2_t10.py tests/test_v2_t12.py` → **191 passed, 1 skipped, 4 warnings in 11.94s**。其中 3 条 `AsyncMockMixin._execute_mock_call was never awaited` 来自 `tests/test_v2_p1.py` mock_db 形态，已调整为 `MagicMock.add + AsyncMock.commit/rollback` 以消除测试警告；1 条 asyncpg `_cancel` unawaited 属跳过真 PG 集成测试环境清理警告，功能用例均通过。
 
 ### T11 · RAGAS 评估 ✅（2026-06-16）
 
@@ -972,6 +1003,19 @@ python scripts/kg_smoke.py
 
 ## 历史变更
 
+- **2026-06-18**：根据 2026-06-17 A/B 审查报告完成第一批 hardening 修复
+  - 新增 [docs/0617/xiugai.md](0617/xiugai.md) 作为 A/B 审查报告统一 TODO 清单，标注当前批次、下批排期与验收建议
+  - 异步防挂死：[app/core/async_utils.py](../app/core/async_utils.py) 新增 `wait_for_named()` / `gather_with_timeout()`；[app/api/v2/endpoints/query.py](../app/api/v2/endpoints/query.py)、[app/rag/query_ner.py](../app/rag/query_ner.py)、[app/ingest/table_description.py](../app/ingest/table_description.py)、[app/ingest/dual_layer.py](../app/ingest/dual_layer.py)、[app/tasks/ingest_task.py](../app/tasks/ingest_task.py) 接入整组超时并保留软降级语义
+  - 入库一致性：[app/tasks/ingest_task.py](../app/tasks/ingest_task.py) 标记 Neo4j 软失败到 `doc_metadata._ingest_warnings`；失败兜底路径尽力清理 Milvus / Neo4j 残留；Step 8 Milvus upsert 改 `asyncio.to_thread()` 避免阻塞事件循环
+  - LLM 防挂死：[app/tasks/session_task.py](../app/tasks/session_task.py)、[app/kg/ner.py](../app/kg/ner.py)、[app/llm/client.py](../app/llm/client.py) 为遗漏的 LiteLLM 调用增加外层硬超时；流式响应对首包与每个 chunk 都做超时保护
+  - Milvus client 安全性：[app/rag/milvus_client.py](../app/rag/milvus_client.py) `create_v2_kb_collection(..., client=...)` 支持显式 client，入库自愈不再临时替换模块级 `_client`
+  - 测试补充：[tests/test_async_utils.py](../tests/test_async_utils.py)、[tests/test_ingest_task.py](../tests/test_ingest_task.py) 增补公共异步工具、Neo4j 降级标记和失败补偿路径覆盖；语法级验证 `python -m compileall ...` 已通过，pytest 按项目约定待用户手动执行
+- **2026-06-17**：修复旧 V1.5 数据库升级 V2 后知识库列表 500
+  - **现象**：前端请求 `GET /api/v1/knowledge-bases?page=1&page_size=100` 返回 500 Internal Server Error
+  - **根因**：V2.0 在 ORM 模型中给 [knowledge_bases](../app/models/knowledge_base.py) 新增 `retrieval_config` / `doc_metadata_schema`，给 [kb_files](../app/models/kb_file.py) 新增 `doc_metadata` / `summary_brief`；但当前项目未引入 Alembic，FastAPI 启动期 `Base.metadata.create_all()` 只会建新表，不会给旧 V1.5 已存在表补列。列表接口 [app/api/v1/endpoints/knowledge_bases.py](../app/api/v1/endpoints/knowledge_bases.py) → [app/services/kb_service.py](../app/services/kb_service.py) 执行 `select(KnowledgeBase)` 时会 SELECT ORM 全字段，PG 旧表缺列触发 `UndefinedColumn`，最终统一异常 handler 返回 500
+  - **修复**：[app/main.py](../app/main.py) 新增 `_ensure_v2_compat_columns()`，在启动 `create_all` 后、Milvus/Neo4j 初始化前执行幂等兼容迁移；通过 `information_schema.columns` 检测旧表列，缺失时执行 `ALTER TABLE ... ADD COLUMN IF NOT EXISTS ...`，旧数据保留且新列默认 NULL
+  - **测试**：[tests/test_v2_t0.py](../tests/test_v2_t0.py) 新增 `_build_v2_compat_alter_sql` 单测 + 真 PG 旧表兼容集成测试，覆盖“旧表补列后 ORM 查询可读出旧 KB 数据”
+  - **验证命令**：按项目约定由用户手动执行 `pytest tests/test_v2_t0.py::TestKBV2Extensions::test_legacy_v1_5_tables_generate_v2_compat_alter_sql tests/test_v2_t0.py::TestKBV2Extensions::test_existing_v2_columns_do_not_generate_alter_sql -q`；有 `TEST_DATABASE_URL` 时可追加 `pytest tests/test_v2_t0.py::test_v2_compat_migration_allows_orm_query_on_legacy_v1_5_tables -q`
 - **2026-06-17**：V2.0 质量修复 batch1（防回归增强）
   - API 基础设施：[app/main.py](../app/main.py) 接入 `CORSMiddleware`；[app/core/config.py](../app/core/config.py) 新增 `CORS_ALLOW_ORIGINS` / `CORS_ALLOW_CREDENTIALS`；[.env.example](../.env.example) 同步前端本地开发白名单示例
   - RAG 精排降级语义：[app/rag/reranker.py](../app/rag/reranker.py) `NoopReranker` 改为保留原始检索 `score`，避免把 BM25/RRF 或 dense 分数覆盖成 1.0；[app/rag/hybrid_retriever.py](../app/rag/hybrid_retriever.py) 传入候选原始分数

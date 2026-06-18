@@ -17,6 +17,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import bindparam, text
 
 from app.api.exceptions import register_exception_handlers
 from app.api.v1.router import router as v1_router
@@ -35,6 +36,66 @@ from app.models import ChatMessage, ChatSession, KbFile, KnowledgeBase  # noqa: 
 from app.models import AgentTrace, EvalTask  # noqa: F401
 
 logger = logging.getLogger(__name__)
+
+
+_V2_COMPAT_COLUMNS: dict[str, dict[str, str]] = {
+    "knowledge_bases": {
+        "retrieval_config": "JSONB",
+        "doc_metadata_schema": "JSONB",
+    },
+    "kb_files": {
+        "doc_metadata": "JSONB",
+        "summary_brief": "TEXT",
+    },
+}
+
+
+def _build_v2_compat_alter_sql(existing: dict[str, set[str]]) -> list[str]:
+    """根据当前 PG 表结构生成 V2 兼容补列 SQL。
+
+    项目当前未引入 Alembic，`create_all` 只能建新表，不能给旧表补列。
+    V1.5 数据库升级到 V2.0 后，如果旧 `knowledge_bases` / `kb_files`
+    表缺少新增列，ORM 查询会因 UndefinedColumn 报 500。
+    """
+    statements: list[str] = []
+    for table_name, columns in _V2_COMPAT_COLUMNS.items():
+        existing_columns = existing.get(table_name)
+        if existing_columns is None:
+            continue
+        for column_name, column_type in columns.items():
+            if column_name not in existing_columns:
+                statements.append(
+                    f"ALTER TABLE {table_name} "
+                    f"ADD COLUMN IF NOT EXISTS {column_name} {column_type}"
+                )
+    return statements
+
+
+async def _ensure_v2_compat_columns() -> None:
+    """启动期幂等补齐 V2.0 新增 PG 列，兼容旧 V1.5 数据库。"""
+    table_names = tuple(_V2_COMPAT_COLUMNS)
+    async with engine.begin() as conn:
+        rows = await conn.execute(
+            text(
+                """
+                SELECT table_name, column_name
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name IN :table_names
+                """
+            ).bindparams(bindparam("table_names", expanding=True)),
+            {"table_names": list(table_names)},
+        )
+        existing: dict[str, set[str]] = {name: set() for name in table_names}
+        for table_name, column_name in rows:
+            existing.setdefault(table_name, set()).add(column_name)
+
+        statements = _build_v2_compat_alter_sql(existing)
+        for sql in statements:
+            await conn.execute(text(sql))
+
+    if statements:
+        logger.info("V2 兼容字段迁移完成：%s", "; ".join(statements))
 
 
 async def _create_all_with_retry(max_attempts: int = 10) -> None:
@@ -87,6 +148,7 @@ async def lifespan(app: FastAPI):
     # 启动时建表（开发态，不替代 alembic）
     # 带 PG 启动期重试，规避 docker compose 刚拉起 PG 还在 startup recovery 的窗口
     await _create_all_with_retry()
+    await _ensure_v2_compat_columns()
     logger.info("数据库表初始化完成")
 
     # Milvus 初始化（同步调用，启动期 < 1s 可接受）

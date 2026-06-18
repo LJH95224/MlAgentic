@@ -463,8 +463,11 @@ class TestV2QueryE2E:
 
             # 入参 + 调用
             req = QueryRequest(query="什么是台风？")
-            mock_db = AsyncMock()
+            mock_db = MagicMock()
             mock_db.get = AsyncMock(return_value=None)  # T8: KB 加载
+            mock_db.add = MagicMock()
+            mock_db.commit = AsyncMock()
+            mock_db.rollback = AsyncMock()
             resp = await v2_query(body=req, db=mock_db)
 
         # 断言：答案正确透传
@@ -522,8 +525,11 @@ class TestV2QueryE2E:
             mock_tracer_cls.return_value = mock_tracer
 
             req = QueryRequest(query="不存在的内容")
-            mock_db = AsyncMock()
+            mock_db = MagicMock()
             mock_db.get = AsyncMock(return_value=None)
+            mock_db.add = MagicMock()
+            mock_db.commit = AsyncMock()
+            mock_db.rollback = AsyncMock()
             resp = await v2_query(body=req, db=mock_db)
 
         # 检索空 → 走兜底文案 → LLM 不应被调用
@@ -575,8 +581,11 @@ class TestV2QueryE2E:
             mock_tracer_cls.return_value = mock_tracer
 
             req = QueryRequest(query="台风")
-            mock_db = AsyncMock()
+            mock_db = MagicMock()
             mock_db.get = AsyncMock(return_value=None)
+            mock_db.add = MagicMock()
+            mock_db.commit = AsyncMock()
+            mock_db.rollback = AsyncMock()
             resp = await v2_query(body=req, db=mock_db)
 
         # LLM 失败 → 走兜底错误文案，不抛异常

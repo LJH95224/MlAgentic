@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db
 from app.models.query_analytics import QueryAnalytics
+from app.schemas.response import ApiResponse
 from app.schemas.v2.analytics import (
     AnalyticsResponse,
     TokenConsumptionStats,
@@ -27,14 +28,14 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["V2 可观测性"])
 
 
-@router.get("/analytics", response_model=AnalyticsResponse)
-async def v2_analytics(
-    start_date: date | None = Query(default=None, description="统计开始日期（默认 7 天前）"),
-    end_date: date | None = Query(default=None, description="统计结束日期（默认今天）"),
-    kb_id: str | None = Query(default=None, description="按知识库过滤"),
-    db: AsyncSession = Depends(get_db),
+async def _build_analytics_response(
+    *,
+    start_date: date | None,
+    end_date: date | None,
+    kb_id: str | None,
+    db: AsyncSession,
 ) -> AnalyticsResponse:
-    """OBS-03 聚合统计：查询量 / 延迟 / 置信度 / 工具使用率 / Token / 错误率。"""
+    """构建 OBS-03 聚合统计数据。"""
     # 默认时间范围：最近 7 天
     if end_date is None:
         end_date = date.today()
@@ -110,3 +111,20 @@ async def v2_analytics(
         start_date=start_date,
         end_date=end_date,
     )
+
+
+@router.get("/analytics", response_model=ApiResponse[AnalyticsResponse])
+async def v2_analytics(
+    start_date: date | None = Query(default=None, description="统计开始日期（默认 7 天前）"),
+    end_date: date | None = Query(default=None, description="统计结束日期（默认今天）"),
+    kb_id: str | None = Query(default=None, description="按知识库过滤"),
+    db: AsyncSession = Depends(get_db),
+) -> ApiResponse[AnalyticsResponse]:
+    """OBS-03 聚合统计：查询量 / 延迟 / 置信度 / 工具使用率 / Token / 错误率。"""
+    data = await _build_analytics_response(
+        start_date=start_date,
+        end_date=end_date,
+        kb_id=kb_id,
+        db=db,
+    )
+    return ApiResponse[AnalyticsResponse].success(data)

@@ -33,6 +33,7 @@ from typing import Any
 import litellm
 from sqlalchemy import asc, select, update
 
+from app.core.async_utils import wait_for_named
 from app.core.config import get_settings
 from app.models.message import ChatMessage
 from app.models.session import ChatSession
@@ -195,7 +196,11 @@ async def _generate_title_main(session_id: str) -> dict:
         ]
 
         logger.info("标题任务: session_id=%s 调 LLM model=%s", session_id, kwargs["model"])
-        resp = await litellm.acompletion(**kwargs)
+        resp = await wait_for_named(
+            litellm.acompletion(**kwargs),
+            timeout_s=settings.litellm_timeout * 1.2,
+            label="session_title_llm",
+        )
         if hasattr(resp, "model_dump"):
             resp_dict = resp.model_dump()
         else:
@@ -301,7 +306,11 @@ async def _generate_summary_main(session_id: str) -> dict:
             kwargs["model"],
             len(body),
         )
-        resp = await litellm.acompletion(**kwargs)
+        resp = await wait_for_named(
+            litellm.acompletion(**kwargs),
+            timeout_s=settings.litellm_timeout * 1.2,
+            label="session_summary_llm",
+        )
         if hasattr(resp, "model_dump"):
             resp_dict = resp.model_dump()
         else:

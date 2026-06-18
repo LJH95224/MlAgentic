@@ -38,6 +38,7 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import select, update
 
+from app.core.async_utils import gather_with_timeout
 from app.core.config import get_settings
 from app.ingest.doc_metadata import DocMetadata, extract_doc_metadata
 from app.ingest.dual_layer import CoarseChunk, generate_coarse_chunks
@@ -195,6 +196,80 @@ async def _bump_kb_chunk_count(
             .values(chunk_count=KnowledgeBase.chunk_count + delta)
         )
         await session.commit()
+
+
+async def _mark_neo4j_degraded(
+    resources: TaskResources,
+    file_id: uuid.UUID,
+    error: Exception,
+) -> None:
+    """把 Neo4j 软失败写入文件元数据，区分“无实体”和“图谱写入失败”。"""
+    warning = {
+        "neo4j_failed": True,
+        "neo4j_error_type": type(error).__name__,
+        "neo4j_error": str(error)[:500],
+        "neo4j_failed_at": _utc_now_iso(),
+    }
+    async with resources.db() as session:
+        row = (
+            await session.execute(select(KbFile).where(KbFile.id == file_id))
+        ).scalar_one_or_none()
+        if row is None:
+            return
+        doc_metadata = dict(row.doc_metadata or {})
+        ingest_warnings = dict(doc_metadata.get("_ingest_warnings") or {})
+        ingest_warnings.update(warning)
+        doc_metadata["_ingest_warnings"] = ingest_warnings
+        await session.execute(
+            update(KbFile)
+            .where(KbFile.id == file_id)
+            .values(doc_metadata=doc_metadata)
+        )
+        await session.commit()
+
+
+async def _cleanup_milvus_chunks_for_file(
+    resources: TaskResources,
+    kb_id: uuid.UUID,
+    file_id: uuid.UUID,
+) -> None:
+    """失败补偿：按 document_id 清理任务级 Milvus client 中的残留切片。"""
+    collection_name = build_kb_collection_name(kb_id)
+    try:
+        if not resources.milvus.has_collection(collection_name):
+            return
+        await asyncio.to_thread(
+            resources.milvus.delete,
+            collection_name=collection_name,
+            filter=f'document_id == "{file_id}"',
+        )
+        logger.info("失败补偿已清理 Milvus collection=%s file_id=%s", collection_name, file_id)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(
+            "失败补偿清理 Milvus 失败 collection=%s file_id=%s err=%s",
+            collection_name,
+            file_id,
+            e,
+        )
+
+
+async def _cleanup_neo4j_document_for_file(
+    resources: TaskResources,
+    kb_id: uuid.UUID,
+    file_id: uuid.UUID,
+) -> None:
+    """失败补偿：删除任务级 Neo4j driver 中该文件的 Document 节点。"""
+    settings = get_settings()
+    delete_cypher = """
+    MATCH (d:Document {document_id: $document_id, kb_id: $kb_id})
+    DETACH DELETE d
+    """.strip()
+    try:
+        async with resources.neo4j.session(database=settings.neo4j_database) as sess:
+            await sess.run(delete_cypher, document_id=str(file_id), kb_id=str(kb_id))
+        logger.info("失败补偿已清理 Neo4j Document kb_id=%s file_id=%s", kb_id, file_id)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("失败补偿清理 Neo4j 失败 kb_id=%s file_id=%s err=%s", kb_id, file_id, e)
 
 
 # ──────────────── V2.0 十一步管道 ────────────────
@@ -402,14 +477,7 @@ def _step_milvus_write_v2(
             kb.id,
             kb.embedding_dim,
         )
-        import app.rag.milvus_client as mod
-
-        prev_client = mod._client
-        mod._client = resources.milvus
-        try:
-            create_v2_kb_collection(kb.id, dim=kb.embedding_dim)
-        finally:
-            mod._client = prev_client
+        create_v2_kb_collection(kb.id, dim=kb.embedding_dim, client=resources.milvus)
 
     rows: list[dict] = []
     for i, (chunk, vec) in enumerate(zip(chunks, vectors)):
@@ -509,9 +577,15 @@ async def _step_ner(chunks: list[StructuredChunk]) -> list[list[dict]]:
                 logger.info("NER 进度: %d/%d (%.0f%%)", completed, total, completed / total * 100)
             return result
 
-    return await asyncio.gather(
-        *[_safe_ner(i, c.content) for i, c in enumerate(chunks)]
-    )
+    try:
+        return await gather_with_timeout(
+            [_safe_ner(i, c.content) for i, c in enumerate(chunks)],
+            timeout_s=max(NER_SINGLE_TIMEOUT_SECONDS + 5, len(chunks) * NER_SINGLE_TIMEOUT_SECONDS / NER_CONCURRENCY + 5),
+            label="ingest_ner",
+        )
+    except asyncio.TimeoutError:
+        logger.warning("NER 整组超时（软失败），返回空实体 chunks=%d", len(chunks))
+        return [[] for _ in chunks]
 
 
 def _step_bm25_auto() -> None:
@@ -587,7 +661,8 @@ async def _main(file_id_str: str, kb_id_str: str) -> dict:
         )
 
         # Step 8: Milvus V2 写入（携带 entity_tags + 结构元数据 + parent_chunk_id + is_summary）
-        _step_milvus_write_v2(
+        await asyncio.to_thread(
+            _step_milvus_write_v2,
             resources,
             kb=kb,
             file_record=file_record,
@@ -616,6 +691,7 @@ async def _main(file_id_str: str, kb_id_str: str) -> dict:
             )
         except Exception as e:  # noqa: BLE001
             logger.warning("Neo4j 写入失败（软失败） file_id=%s: %s", file_id, e)
+            await _mark_neo4j_degraded(resources, file_id, e)
             written_entity_count = 0
 
         # Step 10: BM25 稀疏向量确认（V2 Schema BM25 Function 已在 Step 8 自动生成）
@@ -792,7 +868,11 @@ def parse_and_ingest_task(self, file_id: str, kb_id: str) -> dict:
 
         try:
             asyncio.run(
-                _mark_failed_safe(file_id, error_message=f"{type(exc).__name__}: {exc}")
+                _mark_failed_safe(
+                    file_id,
+                    kb_id=kb_id,
+                    error_message=f"{type(exc).__name__}: {exc}",
+                )
             )
         except Exception as inner:  # noqa: BLE001
             logger.error("ingest 任务失败时回写 status=failed 失败: %s", inner)
@@ -815,13 +895,17 @@ def parse_and_ingest_task(self, file_id: str, kb_id: str) -> dict:
         }
 
 
-async def _mark_failed_safe(file_id: str, *, error_message: str) -> None:
-    """异常路径里调；独立 task_resources。"""
+async def _mark_failed_safe(file_id: str, *, kb_id: str, error_message: str) -> None:
+    """异常路径里调；独立 task_resources，并尽力清理跨存储残留。"""
+    file_uuid = uuid.UUID(file_id)
+    kb_uuid = uuid.UUID(kb_id)
     async with task_resources() as resources:
+        await _cleanup_milvus_chunks_for_file(resources, kb_uuid, file_uuid)
+        await _cleanup_neo4j_document_for_file(resources, kb_uuid, file_uuid)
         async with resources.db() as session:
             await session.execute(
                 update(KbFile)
-                .where(KbFile.id == uuid.UUID(file_id))
+                .where(KbFile.id == file_uuid)
                 .values(
                     status=FILE_STATUS_FAILED,
                     error_message=error_message[:2000],
