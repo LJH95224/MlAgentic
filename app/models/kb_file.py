@@ -140,6 +140,21 @@ class KbFile(Base):
         comment="上传时间",
     )
 
+    # 心跳字段：每次 _set_progress 推进度时由 onupdate=func.now() 自动刷新。
+    # 卡死 processing 回收任务靠它判定文件是否在“合法推进”——
+    # 若 status=processing 且 updated_at 远早于 now()，视为卡死。
+    # 不要用 created_at 做这事：大文件 NER/Embedding 慢，合法跑 30min+ 也常见，
+    # 但每个 _step_xxx 完成后都会 _set_progress 触发 updated_at 推进，
+    # 哪怕单步内部慢 25min 也不会被误判。
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+        index=True,  # 周期回收扫表用
+        comment="行最后更新时间；processing 文件的心跳锚点（卡死回收依据）",
+    )
+
     completed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,

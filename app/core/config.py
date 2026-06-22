@@ -200,6 +200,15 @@ class Settings(BaseSettings):
     # 单文件大小上限（MB），超出返 413（PRD §7.2）
     max_file_size_mb: int = Field(default=50, alias="MAX_FILE_SIZE_MB")
 
+    # --- 卡死 processing 文件回收（A P1-11） ---
+    # ingest_task 心跳超时阈值（秒）：status=processing 且 updated_at 早于 now-阈值
+    # 视为卡死。默认 35 min = Celery hard timeout(30min) + 5min 缓冲，防误判合法慢任务。
+    ingest_stale_timeout_s: int = Field(default=35 * 60, alias="INGEST_STALE_TIMEOUT_S")
+    # 回收周期任务运行间隔（秒），默认 10 min。比阈值短一个数量级才能及时清理。
+    ingest_reaper_interval_s: int = Field(default=600, alias="INGEST_REAPER_INTERVAL_S")
+    # 回收任务总开关；本地纯单测 / 演示环境可关
+    ingest_reaper_enable: bool = Field(default=True, alias="INGEST_REAPER_ENABLE")
+
     # --- 会话上下文窗口（SES-09） ---
     # 从 chat_messages 加载多少条历史进入 LangGraph；system 必含、不计数
     context_window_messages: int = Field(default=20, alias="CONTEXT_WINDOW_MESSAGES")

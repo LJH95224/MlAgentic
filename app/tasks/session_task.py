@@ -35,6 +35,7 @@ from sqlalchemy import asc, select, update
 
 from app.core.async_utils import wait_for_named
 from app.core.config import get_settings
+from app.llm.client import build_completion_kwargs
 from app.models.message import ChatMessage
 from app.models.session import ChatSession
 from app.tasks._resources import task_resources
@@ -79,31 +80,13 @@ def _resolve_kwargs(model_override: str | None) -> dict[str, Any]:
     复用 chat client 的厂商前缀推断逻辑（与 app.kg.ner 一致）。
     """
     settings = get_settings()
-    model = model_override or settings.litellm_model
-    if not model:
-        raise ValueError(
-            "SESSION_TITLE_MODEL / SESSION_SUMMARY_MODEL 都未配置且 LITELLM_MODEL 也为空"
-        )
-
-    # 厂商前缀自动补全
-    if "/" not in model and settings.litellm_api_base:
-        if "deepseek.com" in settings.litellm_api_base:
-            model = f"deepseek/{model}"
-        elif "dashscope.aliyuncs.com" in settings.litellm_api_base:
-            model = f"dashscope/{model}"
-        elif "open.bigmodel.cn" in settings.litellm_api_base:
-            model = f"zhipu/{model}"
-
-    kwargs: dict[str, Any] = {
-        "model": model,
-        "timeout": settings.litellm_timeout,
-        "num_retries": settings.litellm_num_retries,
-    }
-    if settings.litellm_api_key:
-        kwargs["api_key"] = settings.litellm_api_key
-    if settings.litellm_api_base:
-        kwargs["api_base"] = settings.litellm_api_base
-    return kwargs
+    return build_completion_kwargs(
+        messages=[],
+        model=model_override,
+        fallback_model=settings.litellm_model,
+        required_model_label="SESSION_TITLE_MODEL / SESSION_SUMMARY_MODEL 或 LITELLM_MODEL",
+        settings_obj=settings,
+    )
 
 
 def _clean_title(raw: str) -> str:

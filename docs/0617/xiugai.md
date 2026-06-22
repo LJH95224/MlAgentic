@@ -76,16 +76,20 @@
 
 ### B 报告高/中优先级待排期
 
-- [ ] B H-02 / A-01：Agent 工具检索与 V2 检索能力不对等。
-  - 建议：下批重构 `search_knowledge_base` 调用 `hybrid_search()` 或抽公共检索逻辑。
+- [x] B H-02 / A-01：Agent 工具检索与 V2 检索能力不对等。
+  - 结果：`search_knowledge_base` 已委托 `hybrid_search()`，Agent ReAct 主动检索与 `/api/v2/query` 同享 BM25/RRF/Reranker 与 V2 结构字段。
 
-- [ ] B H-03：multi_query 二次 RRF 分数归一化，避免 confidence 语义失真。
+- [x] B H-03：multi_query 二次 RRF 分数归一化，避免 confidence 语义失真。
+  - 结果：`_multi_query_search` 按有效检索路径数归一化 RRF 分数，空结果/异常路径不计入分母。
 
-- [ ] B H-04：`/v2/retrieve` 返回 `vector_score` / `bm25_score` / `rrf_score` 分项分数。
+- [x] B H-04：`/v2/retrieve` 返回 `vector_score` / `bm25_score` / `rrf_score` 分项分数。
+  - 结果：`HybridSearchResult` 新增 `vector_score` / `bm25_score` / `rrf_score` / `rerank_score`；`/api/v2/retrieve` 响应逐字段透出。当前 Milvus `hybrid_search + RRFRanker` 不暴露 BM25 单路原始分数，`bm25_score` 暂为 `None`，`rrf_score` 表示融合分数。
 
-- [ ] B H-05：`/v2/retrieve` 接入 Trace，返回非空 `trace_id`。
+- [x] B H-05：`/v2/retrieve` 接入 Trace，返回非空 `trace_id`。
+  - 结果：`/api/v2/retrieve` 已记录 `query_ner` / `graph_anchor` / `retrieve` 三步 Trace，成功与软失败响应均返回 `trace_id`。
 
-- [ ] B M-09 / M-10：统一 LLM 调用入口与厂商前缀推断逻辑。
+- [x] B M-09 / M-10：统一 LLM 调用入口与厂商前缀推断逻辑。
+  - 结果：`app.llm.client` 新增 `build_completion_kwargs()`，统一 chat completion 类调用的 model/api_key/api_base/timeout/num_retries 组装；`_resolve_model_name()` 改为 LiteLLM provider 白名单判断，修复 `Qwen/Qwen3-*` 这类模型命名空间被误判为 provider 前缀的问题；Query rewrite、KG NER、IDP、Faithfulness、Session/Eval、V2 query/generate 已接入。
 
 ---
 

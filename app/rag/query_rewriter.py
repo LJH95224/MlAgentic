@@ -24,6 +24,7 @@ from typing import Any
 import litellm
 
 from app.core.config import get_settings
+from app.llm.client import build_completion_kwargs
 
 logger = logging.getLogger(__name__)
 
@@ -83,32 +84,14 @@ def _resolve_rewriter_kwargs(messages: list[dict]) -> dict[str, Any]:
     厂商前缀推断逻辑与 [app/kg/ner.py](../kg/ner.py) 保持一致。
     """
     settings = get_settings()
-    model = settings.query_rewriter_model or settings.litellm_model
-    if not model:
-        raise ValueError(
-            "Query 改写模型未配置：请在 .env 中设置 QUERY_REWRITER_MODEL 或 LITELLM_MODEL"
-        )
-
-    if "/" not in model and settings.litellm_api_base:
-        if "deepseek.com" in settings.litellm_api_base:
-            model = f"deepseek/{model}"
-        elif "dashscope.aliyuncs.com" in settings.litellm_api_base:
-            model = f"dashscope/{model}"
-        elif "open.bigmodel.cn" in settings.litellm_api_base:
-            model = f"zhipu/{model}"
-
-    kwargs: dict[str, Any] = {
-        "model": model,
-        "messages": messages,
-        "temperature": 0.3,
-        "timeout": settings.litellm_timeout,
-        "num_retries": settings.litellm_num_retries,
-    }
-    if settings.litellm_api_key:
-        kwargs["api_key"] = settings.litellm_api_key
-    if settings.litellm_api_base:
-        kwargs["api_base"] = settings.litellm_api_base
-    return kwargs
+    return build_completion_kwargs(
+        messages=messages,
+        model=settings.query_rewriter_model,
+        fallback_model=settings.litellm_model,
+        required_model_label="QUERY_REWRITER_MODEL 或 LITELLM_MODEL",
+        temperature=0.3,
+        settings_obj=settings,
+    )
 
 
 def _extract_content(resp: Any) -> str:

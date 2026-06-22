@@ -440,6 +440,19 @@ class TestResolveEvalLLMKwargs:
             r = _resolve_eval_llm_kwargs("v4-pro")
         assert r["model"] == "deepseek/v4-pro"
 
+    def test_model_namespace_slash_uses_unified_provider_prefix_resolution(self):
+        """Eval 任务应复用统一前缀推断，Qwen/Qwen3 需补 openai/。"""
+        from app.tasks.eval_task import _resolve_eval_llm_kwargs
+
+        with patch("app.tasks.eval_task.get_settings") as mock_get:
+            mock_get.return_value = SimpleNamespace(
+                litellm_model=None,
+                litellm_api_key="k",
+                litellm_api_base="https://api.siliconflow.cn/v1",
+            )
+            r = _resolve_eval_llm_kwargs("Qwen/Qwen3-8B")
+        assert r["model"] == "openai/Qwen/Qwen3-8B"
+
 
 # ════════════════════════════════════════════════════════════════
 # 6. eval_task._run_evaluation_main（Celery 主流程）

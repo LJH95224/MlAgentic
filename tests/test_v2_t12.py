@@ -84,7 +84,7 @@ class TestAnalyticsWriter:
             TraceStep(step_type="query_rewrite", step_latency_ms=100, step_output={"rewritten_len": 50}),
             TraceStep(step_type="query_ner", step_latency_ms=200, step_output={"entity_count": 2}),
             TraceStep(step_type="graph_anchor", step_latency_ms=150, step_output={"tag_count": 3}),
-            TraceStep(step_type="retrieve", step_latency_ms=300, step_input={"query_rewrite": "hyde"}, step_output={"hit_count": 5}),
+            TraceStep(step_type="retrieve", step_latency_ms=300, step_input={"query_rewrite": "hyde"}, step_output={"hit_count": 5, "bm25_enabled": True}),
             TraceStep(step_type="build_context", step_latency_ms=10, step_output={"chunks": 5}),
             TraceStep(step_type="generate", step_latency_ms=2000, model_name="deepseek-v4", token_count=1500, step_output={"answer_len": 200}),
             TraceStep(step_type="citation_parse", step_latency_ms=5, step_output={"citations": 3}),
@@ -110,6 +110,7 @@ class TestAnalyticsWriter:
         assert snap["confidence"] == 0.85
         assert snap["low_confidence"] is False  # 0.85 >= 0.5
         assert snap["graph_rag_triggered"] is True  # 有 graph_anchor 且 tag_count > 0
+        assert snap["bm25_contributed"] is True  # retrieve 开 bm25 + 有命中
         assert snap["faithfulness_check_triggered"] is True  # 有 faithfulness_check 步骤
         assert snap["total_tokens"] == 1500  # generate 步骤的 token_count
         assert snap["react_steps"] == 9
@@ -164,8 +165,76 @@ class TestAnalyticsWriter:
         assert snap["react_steps"] == 0
         assert snap["total_tokens"] == 0
         assert snap["graph_rag_triggered"] is False
+        assert snap["bm25_contributed"] is False  # 没 retrieve step → 不算贡献
         assert snap["has_error"] is False
         assert snap["low_confidence"] is True  # 0.0 < 0.5
+
+    def test_bm25_not_contributed_when_disabled(self):
+        """B-M-11：bm25_enable=False 时不算贡献，哪怕有命中。"""
+        from app.observability.analytics_writer import build_analytics_snapshot
+        from app.observability.tracer import TraceStep
+        steps = [
+            TraceStep(
+                step_type="retrieve",
+                step_latency_ms=100,
+                step_output={"hit_count": 5, "bm25_enabled": False},
+            ),
+        ]
+        snap = build_analytics_snapshot(
+            trace_id="bm25_off",
+            session_id=None,
+            kb_id=None,
+            total_latency_ms=100,
+            confidence=0.8,
+            enable_faithfulness_check=False,
+            steps=steps,
+        )
+        assert snap["bm25_contributed"] is False
+
+    def test_bm25_not_contributed_when_no_hits(self):
+        """B-M-11：bm25 开启但检索 0 命中，不算贡献（无数据可融合）。"""
+        from app.observability.analytics_writer import build_analytics_snapshot
+        from app.observability.tracer import TraceStep
+        steps = [
+            TraceStep(
+                step_type="retrieve",
+                step_latency_ms=100,
+                step_output={"hit_count": 0, "bm25_enabled": True},
+            ),
+        ]
+        snap = build_analytics_snapshot(
+            trace_id="empty_hit",
+            session_id=None,
+            kb_id=None,
+            total_latency_ms=100,
+            confidence=0.0,
+            enable_faithfulness_check=False,
+            steps=steps,
+        )
+        assert snap["bm25_contributed"] is False
+
+    def test_bm25_legacy_step_without_flag(self):
+        """旧 trace 数据缺 bm25_enabled 字段时，保守判定为未贡献（避免误统计）。"""
+        from app.observability.analytics_writer import build_analytics_snapshot
+        from app.observability.tracer import TraceStep
+        steps = [
+            TraceStep(
+                step_type="retrieve",
+                step_latency_ms=100,
+                step_output={"hit_count": 5},  # 旧字段，无 bm25_enabled
+            ),
+        ]
+        snap = build_analytics_snapshot(
+            trace_id="legacy",
+            session_id=None,
+            kb_id=None,
+            total_latency_ms=100,
+            confidence=0.8,
+            enable_faithfulness_check=False,
+            steps=steps,
+        )
+        # 缺字段时 .get() 返 None，is True 不成立 → 不算贡献
+        assert snap["bm25_contributed"] is False
 
 
 # ──────────────── /v2/query 集成 ────────────────

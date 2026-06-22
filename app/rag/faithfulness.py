@@ -26,6 +26,7 @@ from typing import Any, Literal
 import litellm
 
 from app.core.config import get_settings
+from app.llm.client import build_completion_kwargs
 
 logger = logging.getLogger(__name__)
 
@@ -88,33 +89,16 @@ def _resolve_kwargs(messages: list[dict]) -> dict[str, Any]:
     厂商前缀推断与 [app/kg/ner.py](../kg/ner.py) 同款。
     """
     settings = get_settings()
-    model = settings.faithfulness_model or settings.litellm_model
-    if not model:
-        raise ValueError(
-            "Faithfulness 模型未配置：请在 .env 中设置 FAITHFULNESS_CHECK_MODEL 或 LITELLM_MODEL"
-        )
-
-    if "/" not in model and settings.litellm_api_base:
-        if "deepseek.com" in settings.litellm_api_base:
-            model = f"deepseek/{model}"
-        elif "dashscope.aliyuncs.com" in settings.litellm_api_base:
-            model = f"dashscope/{model}"
-        elif "open.bigmodel.cn" in settings.litellm_api_base:
-            model = f"zhipu/{model}"
-
-    kwargs: dict[str, Any] = {
-        "model": model,
-        "messages": messages,
-        "temperature": 0.1,  # 自检要求确定性，低温度
-        "max_tokens": 1500,
-        "timeout": settings.litellm_timeout,
-        "num_retries": 0,  # 自检失败软降级，不再多次重试增加延迟
-    }
-    if settings.litellm_api_key:
-        kwargs["api_key"] = settings.litellm_api_key
-    if settings.litellm_api_base:
-        kwargs["api_base"] = settings.litellm_api_base
-    return kwargs
+    return build_completion_kwargs(
+        messages=messages,
+        model=settings.faithfulness_model,
+        fallback_model=settings.litellm_model,
+        required_model_label="FAITHFULNESS_CHECK_MODEL 或 LITELLM_MODEL",
+        temperature=0.1,  # 自检要求确定性，低温度
+        max_tokens=1500,
+        num_retries=0,  # 自检失败软降级，不再多次重试增加延迟
+        settings_obj=settings,
+    )
 
 
 def _strip_code_fence(text: str) -> str:

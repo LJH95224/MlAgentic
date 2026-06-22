@@ -210,6 +210,25 @@ def _llm_resp(content: str) -> MagicMock:
 
 
 class TestCheckFaithfulness:
+    def test_resolve_kwargs_uses_unified_provider_prefix_resolution(self):
+        """Faithfulness LLM kwargs 应复用统一前缀推断，Qwen/Qwen3 需补 openai/。"""
+        from types import SimpleNamespace
+
+        from app.rag.faithfulness import _resolve_kwargs
+
+        with patch("app.rag.faithfulness.get_settings") as mock_settings:
+            mock_settings.return_value = SimpleNamespace(
+                faithfulness_model="Qwen/Qwen3-8B",
+                litellm_model=None,
+                litellm_api_base="https://api.siliconflow.cn/v1",
+                litellm_api_key="sk-test",
+                litellm_timeout=60.0,
+                litellm_num_retries=0,
+            )
+            kwargs = _resolve_kwargs(messages=[{"role": "user", "content": "检查"}])
+        assert kwargs["model"] == "openai/Qwen/Qwen3-8B"
+        assert kwargs["api_base"] == "https://api.siliconflow.cn/v1"
+
     @pytest.mark.asyncio
     async def test_all_supported(self):
         from app.rag.faithfulness import check_faithfulness

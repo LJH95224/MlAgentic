@@ -24,6 +24,7 @@ from app.agent.context import reset_current_kb_ids, set_current_kb_ids
 from app.core.async_utils import gather_with_timeout
 from app.core.config import get_settings
 from app.models.knowledge_base import KnowledgeBase
+from app.llm.client import build_completion_kwargs
 from app.observability.tracer import Tracer
 from app.observability.analytics_writer import write_analytics_snapshot
 from app.rag.citation import (
@@ -162,6 +163,7 @@ async def _v2_query_inner(
                 "query_rewrite": resolved.query_rewrite,
                 "top_k": resolved.top_k,
                 "entity_tag_count": len(entity_tags),
+                "bm25_enabled": resolved.bm25_enable,
             },
         ) as retrieve_step:
             try:
@@ -176,7 +178,12 @@ async def _v2_query_inner(
                 logger.error("V2 query 检索失败: %s", e, exc_info=True)
                 results = []
                 retrieve_step.error_message = f"{type(e).__name__}: {e}"
-            retrieve_step.step_output = {"hit_count": len(results)}
+            # bm25_enabled 写到 step_output 让 analytics_writer 精确判定 BM25 是否
+            # 真正贡献：只有开关开启且本次有命中才记为 contributed（OBS-03 / B-M-11）。
+            retrieve_step.step_output = {
+                "hit_count": len(results),
+                "bm25_enabled": resolved.bm25_enable,
+            }
 
             chunks_for_citation = [
                 {
@@ -388,14 +395,19 @@ async def _multi_query_search(
         logger.warning("multi_query 整组检索超时（软降级为空结果） queries=%d", len(queries))
         return []
 
-    # RRF 累加：score(c) = Σ 1/(k + rank_i(c))
+    # RRF 累加：score(c) = Σ 1/(k + rank_i(c))，再除以有效检索路径数归一化到 [0,1]。
+    # 归一化后 multi_query 的 confidence 不会因子查询数量增加而虚高。
     rrf_scores: dict[int, float] = {}
     chunk_map: dict[int, HybridSearchResult] = {}
+    valid_path_count = 0
     for path_idx, results in enumerate(raw):
         if isinstance(results, Exception):
             logger.warning("multi_query 第 %d 路检索失败（已忽略）：%s",
                            path_idx, results)
             continue
+        if not results:
+            continue
+        valid_path_count += 1
         for rank, item in enumerate(results, start=1):
             cid = item.chunk_id
             if cid is None:
@@ -406,11 +418,20 @@ async def _multi_query_search(
             if cid not in chunk_map or item.score > chunk_map[cid].score:
                 chunk_map[cid] = item
 
-    # 按 RRF 分数降序，取 top_k
-    sorted_cids = sorted(rrf_scores.keys(), key=lambda c: rrf_scores[c], reverse=True)
+    if valid_path_count == 0:
+        return []
+
+    max_rrf_score = valid_path_count / (rrf_k + 1)
+    normalized_scores = {
+        cid: min(score / max_rrf_score, 1.0)
+        for cid, score in rrf_scores.items()
+    }
+
+    # 按归一化 RRF 分数降序，取 top_k
+    sorted_cids = sorted(normalized_scores.keys(), key=lambda c: normalized_scores[c], reverse=True)
     top_cids = sorted_cids[:top_k]
 
-    # 用 RRF 分数覆盖 score 字段，便于下游 citation 看到新排名
+    # 用归一化 RRF 分数覆盖 score 字段，便于下游 citation / confidence 使用同一量纲
     merged: list[HybridSearchResult] = []
     for cid in top_cids:
         item = chunk_map[cid]
@@ -419,7 +440,7 @@ async def _multi_query_search(
                 chunk_id=item.chunk_id,
                 content=item.content,
                 document_id=item.document_id,
-                score=rrf_scores[cid],
+                score=normalized_scores[cid],
                 entity_tags=item.entity_tags,
                 heading_path=item.heading_path,
                 block_type=item.block_type,
@@ -466,16 +487,16 @@ async def generate_answer(
         # num_retries 不是 litellm.acompletion 的显式参数，
         # 通过模块级设置配置重试次数
         litellm.num_retries = settings.litellm_num_retries
+        kwargs = build_completion_kwargs(
+            messages=messages,
+            model=settings.litellm_model,
+            required_model_label="LITELLM_MODEL",
+            temperature=0.3,
+            max_tokens=2000,
+            settings_obj=settings,
+        )
         response = await asyncio.wait_for(
-            litellm.acompletion(
-                model=settings.litellm_model,
-                messages=messages,
-                api_key=settings.litellm_api_key,
-                api_base=settings.litellm_api_base,
-                temperature=0.3,
-                max_tokens=2000,
-                timeout=settings.litellm_timeout,
-            ),
+            litellm.acompletion(**kwargs),
             timeout=hard_timeout,
         )
         return response.choices[0].message.content or ""

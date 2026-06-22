@@ -165,141 +165,93 @@ def mock_settings(monkeypatch):
     fake.embedding_dimension = 4096
 
     monkeypatch.setattr(config, "get_settings", lambda: fake)
-    # retriever 模块自己也 import 了 get_settings，要同步 patch
-    monkeypatch.setattr("app.rag.retriever.get_settings", lambda: fake)
+    # get_current_role 走 app.rag.filters.get_settings（P2-13 后 retriever 不再
+    # 直接 import get_settings，只 re-export filters 中的工具函数）
+    monkeypatch.setattr("app.rag.filters.get_settings", lambda: fake)
     return fake
 
 
 @pytest.fixture
-def mock_embed(monkeypatch):
-    """mock aembed_texts：固定返回 4096 维零向量。"""
-    fake_vec = [0.0] * 4096
-    mock = AsyncMock(return_value=[fake_vec])
-    monkeypatch.setattr("app.rag.retriever.aembed_texts", mock)
+def mock_hybrid_search(monkeypatch):
+    """mock hybrid_search：验证 Agent Tool 复用 V2 混合检索链路。"""
+    from app.rag.hybrid_retriever import HybridSearchResult
+
+    mock = AsyncMock(return_value=[
+        HybridSearchResult(
+            chunk_id=1,
+            content="示例片段",
+            document_id="doc_a",
+            score=0.91,
+            entity_tags=["气象"],
+            heading_path=["第一章"],
+            page_number=2,
+            metadata={"type": "report"},
+        )
+    ])
+    monkeypatch.setattr("app.rag.hybrid_retriever.hybrid_search", mock)
     return mock
 
 
-@pytest.fixture
-def mock_client(monkeypatch):
-    """mock get_milvus_client：返回 search 可被预设的 mock 对象。"""
-    client = MagicMock()
-    # 默认返回单条命中
-    client.search.return_value = [
-        [
-            {
-                "distance": 0.91,
-                "entity": {
-                    "document_id": "doc_a",
-                    "content": "示例片段",
-                    "entity_tags": ["气象"],
-                    "metadata": {"type": "report"},
-                },
-            }
-        ]
-    ]
-    monkeypatch.setattr("app.rag.retriever.get_milvus_client", lambda: client)
-    return client
-
-
 @pytest.mark.asyncio
-async def test_do_search_basic_calls_milvus_with_role_filter(
-    mock_settings, mock_embed, mock_client
-):
-    """基础检索：filter 必含权限基线（RAG-04）。"""
+async def test_do_search_uses_v2_hybrid_search(mock_settings, mock_hybrid_search):
+    """Agent Tool 复用 V2 hybrid_search，获得 BM25/RRF/Reranker 能力。"""
     out = await _do_search(
         query="台风", top_k=5, doc_type=None, document_id=None, entity_tags=None
     )
 
-    # embedding 被调用
-    mock_embed.assert_awaited_once_with(["台风"])
-
-    # milvus.search 被调用一次
-    assert mock_client.search.call_count == 1
-    call_kwargs = mock_client.search.call_args.kwargs
-
-    # 校验关键 kwargs
-    assert call_kwargs["collection_name"] == "knowledge_chunks"
-    assert call_kwargs["limit"] == 5
-    assert call_kwargs["data"] == [[0.0] * 4096]
-    assert 'ARRAY_CONTAINS(allowed_roles, "ALL")' in call_kwargs["filter"]
-    # 输出字段必须含 document_id 与 entity_tags（RAG-05）
-    assert "document_id" in call_kwargs["output_fields"]
-    assert "entity_tags" in call_kwargs["output_fields"]
-    # 度量类型 COSINE
-    assert call_kwargs["search_params"]["metric_type"] == "COSINE"
-
-    # 输出包含命中内容
+    mock_hybrid_search.assert_awaited_once_with(
+        query="台风",
+        top_k=5,
+        doc_type=None,
+        document_id=None,
+        entity_tags=None,
+    )
     assert "示例片段" in out
+    assert "heading=第一章" in out
 
 
 @pytest.mark.asyncio
-async def test_do_search_with_doc_type_filter(
-    mock_settings, mock_embed, mock_client
-):
-    """带 doc_type 时 filter 含 metadata 子句（RAG-03）。"""
+async def test_do_search_passes_filters_to_hybrid_search(mock_settings, mock_hybrid_search):
+    """doc_type / document_id / entity_tags 原样透传给 V2 检索链路。"""
     await _do_search(
-        query="x", top_k=3, doc_type="report", document_id=None, entity_tags=None
-    )
-    expr = mock_client.search.call_args.kwargs["filter"]
-    assert 'metadata["type"] == "report"' in expr
-
-
-@pytest.mark.asyncio
-async def test_do_search_with_document_id_filter(
-    mock_settings, mock_embed, mock_client
-):
-    """带 document_id 时 filter 含 document_id 等值子句。"""
-    await _do_search(
-        query="x", top_k=3, doc_type=None, document_id="d42", entity_tags=None
-    )
-    expr = mock_client.search.call_args.kwargs["filter"]
-    assert 'document_id == "d42"' in expr
-
-
-@pytest.mark.asyncio
-async def test_do_search_with_entity_tags(mock_settings, mock_embed, mock_client):
-    """带 entity_tags 时 filter 含 ARRAY_CONTAINS_ANY 子句（KG-04 联合）。"""
-    await _do_search(
-        query="x", top_k=3, doc_type=None, document_id=None,
+        query="x", top_k=3, doc_type="report", document_id="d42",
         entity_tags=["台风", "ECMWF"],
     )
-    expr = mock_client.search.call_args.kwargs["filter"]
-    assert "ARRAY_CONTAINS_ANY(entity_tags," in expr
-    assert '"台风"' in expr
-    assert '"ECMWF"' in expr
+    mock_hybrid_search.assert_awaited_once_with(
+        query="x",
+        top_k=3,
+        doc_type="report",
+        document_id="d42",
+        entity_tags=["台风", "ECMWF"],
+    )
 
 
 @pytest.mark.asyncio
-async def test_do_search_clamps_top_k(mock_settings, mock_embed, mock_client):
+async def test_do_search_clamps_top_k(mock_settings, mock_hybrid_search):
     """top_k 越界（>50）应被夹到 50；非法值（<1）应回退到 5。"""
     await _do_search(
         query="x", top_k=999, doc_type=None, document_id=None, entity_tags=None
     )
-    assert mock_client.search.call_args.kwargs["limit"] == 50
+    assert mock_hybrid_search.call_args.kwargs["top_k"] == 50
 
-    mock_client.reset_mock()
+    mock_hybrid_search.reset_mock()
     await _do_search(
         query="x", top_k=0, doc_type=None, document_id=None, entity_tags=None
     )
-    assert mock_client.search.call_args.kwargs["limit"] == 5
+    assert mock_hybrid_search.call_args.kwargs["top_k"] == 5
 
 
 @pytest.mark.asyncio
-async def test_do_search_exception_caught_per_collection(
-    mock_settings, mock_embed, mock_client
+async def test_do_search_returns_empty_kb_hint_without_hybrid_call(
+    mock_settings, mock_hybrid_search, monkeypatch
 ):
-    """V1.5 KB-06 改造：per-collection 失败应被吞掉（warning 不抛）。
-
-    背景：KB-06 允许 kb_ids 传多个 Collection，其中一个挂了不应让其它失败。
-    AGT-04 错误反思链路改在更高层（Agent runner）实施，不在 retriever。
-    """
-    mock_client.search.side_effect = RuntimeError("milvus down")
-    # 不抛，应返"无结果"提示文本（_format_hits 对空 hits 的兜底）
+    """kb_ids=[] 时保持 V1.5 语义：不查任何 Collection。"""
+    monkeypatch.setattr("app.rag.retriever.get_current_kb_ids", lambda: [])
     result = await _do_search(
         query="x", top_k=5, doc_type=None, document_id=None, entity_tags=None
     )
-    assert isinstance(result, str)
-    assert "无结果" in result or "（" in result
+    assert "未指定知识库" in result
+    mock_hybrid_search.assert_not_awaited()
 
 
 # ──────────────────── @tool 装饰器集成（RAG-02 验收） ────────────────────

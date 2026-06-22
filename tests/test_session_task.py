@@ -122,6 +122,18 @@ def test_resolve_kwargs_keeps_explicit_provider_prefix(monkeypatch):
     assert kw["model"] == "zhipu/glm-4-flash"
 
 
+def test_resolve_kwargs_uses_unified_provider_prefix_resolution(monkeypatch):
+    """Session 任务应复用统一前缀推断，Qwen/Qwen3 需补 openai/。"""
+    monkeypatch.setenv("LITELLM_MODEL", "deepseek-v4-flash")
+    monkeypatch.setenv("LITELLM_API_BASE", "https://api.siliconflow.cn/v1")
+    from app.core.config import get_settings
+
+    get_settings.cache_clear()
+
+    kw = session_task._resolve_kwargs("Qwen/Qwen3-8B")
+    assert kw["model"] == "openai/Qwen/Qwen3-8B"
+
+
 # ──────────────── _generate_title_main mock ────────────────
 
 

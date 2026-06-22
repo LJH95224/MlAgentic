@@ -41,7 +41,24 @@ _VENDOR_PREFIX_MAP: list[tuple[str, str]] = [
     ("dashscope.aliyuncs.com", "dashscope"),
     ("open.bigmodel.cn", "zhipu"),
     ("api.openai.com", "openai"),
+    # SiliconFlow 暴露 OpenAI 兼容 /v1/chat/completions，LiteLLM 走 openai/ provider。
+    ("siliconflow.cn", "openai"),
 ]
+
+# LiteLLM provider 前缀白名单；模型命名空间如 Qwen/Qwen3 不在此列，仍需补 provider。
+_KNOWN_LITELLM_PROVIDERS = {
+    "openai",
+    "deepseek",
+    "dashscope",
+    "zhipu",
+    "anthropic",
+    "gemini",
+    "cohere",
+    "mistral",
+    "ollama",
+    "jina_ai",
+    "voyage",
+}
 
 
 def _resolve_model_name(model: str | None, api_base: str | None) -> str:
@@ -53,9 +70,11 @@ def _resolve_model_name(model: str | None, api_base: str | None) -> str:
     if not model:
         raise ValueError("LITELLM_MODEL 未配置。请在 .env 中设置，例如 LITELLM_MODEL=deepseek/deepseek-chat")
 
-    # 用户已写明前缀
+    # 用户已写明 LiteLLM provider 前缀时直接返回；模型命名空间（如 Qwen/Qwen3）不算 provider。
     if "/" in model:
-        return model
+        prefix = model.split("/", 1)[0].lower()
+        if prefix in _KNOWN_LITELLM_PROVIDERS:
+            return model
 
     # 根据 api_base 推断
     if api_base:
@@ -73,32 +92,60 @@ def _resolve_model_name(model: str | None, api_base: str | None) -> str:
 # ────────────── 公共调用参数 ──────────────
 
 
-def _build_kwargs(
+def build_completion_kwargs(
+    *,
     messages: list[Message],
+    model: str | None = None,
+    fallback_model: str | None = None,
+    required_model_label: str = "LITELLM_MODEL",
     tools: list[ToolDefinition] | None = None,
+    settings_obj: Any | None = None,
     **extra: Any,
 ) -> dict[str, Any]:
-    """拼装 litellm.acompletion / acompletion(stream=True) 的公共 kwargs。"""
-    settings = get_settings()
+    """拼装 LiteLLM chat completion kwargs。
 
-    model = _resolve_model_name(settings.litellm_model, settings.litellm_api_base)
+    Args:
+        messages: OpenAI 兼容消息列表。
+        model: 调用方专用模型（如 QUERY_REWRITER_MODEL / IDP_LLM_MODEL）。
+        fallback_model: model 为空时的兜底模型；不传则使用 settings.litellm_model。
+        required_model_label: 缺模型时报错文案中的配置项名称。
+        tools: 可选 Function Calling 工具定义。
+        settings_obj: 测试或特殊任务可显式传入 settings，避免重复读取全局配置。
+        **extra: temperature / max_tokens / response_format / num_retries 等覆盖项。
+    """
+    settings = settings_obj or get_settings()
+    selected_model = model or fallback_model or settings.litellm_model
+    if not selected_model:
+        raise ValueError(f"{required_model_label} 未配置")
+
+    resolved_model = _resolve_model_name(selected_model, settings.litellm_api_base)
+    timeout = getattr(settings, "litellm_timeout", 60.0)
+    num_retries = getattr(settings, "litellm_num_retries", 2)
     kwargs: dict[str, Any] = {
-        "model": model,
+        "model": resolved_model,
         "messages": messages,
-        "timeout": settings.litellm_timeout,
-        "num_retries": settings.litellm_num_retries,
+        "timeout": timeout,
+        "num_retries": num_retries,
     }
 
     if settings.litellm_api_key:
         kwargs["api_key"] = settings.litellm_api_key
     if settings.litellm_api_base:
         kwargs["api_base"] = settings.litellm_api_base
-
     if tools:
         kwargs["tools"] = tools
 
     kwargs.update(extra)
     return kwargs
+
+
+def _build_kwargs(
+    messages: list[Message],
+    tools: list[ToolDefinition] | None = None,
+    **extra: Any,
+) -> dict[str, Any]:
+    """拼装 litellm.acompletion / acompletion(stream=True) 的公共 kwargs。"""
+    return build_completion_kwargs(messages=messages, tools=tools, **extra)
 
 
 def _to_dict(obj: Any) -> Any:

@@ -32,6 +32,7 @@ from typing import Any
 from sqlalchemy import select, update
 
 from app.core.config import get_settings
+from app.llm.client import build_completion_kwargs
 from app.models.eval_task import (
     EVAL_STATUS_COMPLETED,
     EVAL_STATUS_FAILED,
@@ -78,25 +79,17 @@ def _resolve_eval_llm_kwargs(model_override: str | None) -> dict[str, Any]:
         {"model": ..., "api_key": ..., "api_base": ...}
     """
     settings = get_settings()
-    model = model_override or settings.litellm_model
-    if not model:
-        raise ValueError(
-            "EVAL_LLM_MODEL / LITELLM_MODEL 都未配置，无法运行 RAGAS 评估"
-        )
-
-    # 厂商前缀自动补全（与 session_task 一致）
-    if "/" not in model and settings.litellm_api_base:
-        if "deepseek.com" in settings.litellm_api_base:
-            model = f"deepseek/{model}"
-        elif "dashscope.aliyuncs.com" in settings.litellm_api_base:
-            model = f"dashscope/{model}"
-        elif "open.bigmodel.cn" in settings.litellm_api_base:
-            model = f"zhipu/{model}"
-
+    kwargs = build_completion_kwargs(
+        messages=[],
+        model=model_override,
+        fallback_model=settings.litellm_model,
+        required_model_label="EVAL_LLM_MODEL 或 LITELLM_MODEL",
+        settings_obj=settings,
+    )
     return {
-        "model": model,
-        "api_key": settings.litellm_api_key,
-        "api_base": settings.litellm_api_base,
+        "model": kwargs["model"],
+        "api_key": kwargs.get("api_key"),
+        "api_base": kwargs.get("api_base"),
     }
 
 

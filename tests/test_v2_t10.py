@@ -177,6 +177,21 @@ class TestRerankSchema:
 class TestRetrieveEndpoint:
     """UQA-02 POST /api/v2/retrieve 端点测试。"""
 
+    @pytest.fixture(autouse=True)
+    def _patch_tracer(self):
+        """Mock Tracer，避免单测连接真实 PG，并验证 trace_id 透出。"""
+        with patch("app.api.v2.endpoints.retrieve.Tracer") as mock_cls:
+            tracer = MagicMock()
+            tracer.trace_id = "trace-retrieve-001"
+            tracer.__aenter__ = AsyncMock(return_value=tracer)
+            tracer.__aexit__ = AsyncMock(return_value=False)
+            step = MagicMock()
+            step.__enter__ = MagicMock(return_value=step)
+            step.__exit__ = MagicMock(return_value=False)
+            tracer.step = MagicMock(return_value=step)
+            mock_cls.return_value = tracer
+            yield tracer
+
     @pytest.fixture
     def _patch_hybrid_search(self):
         """Mock hybrid_search 返回预设结果。
@@ -193,6 +208,10 @@ class TestRetrieveEndpoint:
                 content="违约金为合同总额的20%",
                 document_id="doc_001",
                 score=0.94,
+                vector_score=0.88,
+                bm25_score=None,
+                rrf_score=0.81,
+                rerank_score=0.94,
                 entity_tags=["违约金"],
                 heading_path=["第三条 违约责任"],
                 block_type="paragraph",
@@ -205,6 +224,10 @@ class TestRetrieveEndpoint:
                 content="交货地址：北京市朝阳区",
                 document_id="doc_001",
                 score=0.45,
+                vector_score=0.40,
+                bm25_score=None,
+                rrf_score=0.42,
+                rerank_score=0.45,
                 heading_path=["第五条 交货"],
                 block_type="paragraph",
                 page_number=5,
@@ -218,16 +241,22 @@ class TestRetrieveEndpoint:
             yield mock
 
     @pytest.mark.asyncio
-    async def test_retrieve_returns_chunks(self, _patch_hybrid_search):
-        """检索返回 chunk 列表 + 分数字段。"""
+    async def test_retrieve_returns_chunks(self, _patch_hybrid_search, _patch_tracer):
+        """检索返回 chunk 列表 + 分数字段 + trace_id。"""
         from app.api.v2.endpoints.retrieve import v2_retrieve
         from app.schemas.v2.retrieve import RetrieveRequest
 
         body = RetrieveRequest(query="违约金条款", kb_ids=[uuid.uuid4()])
         resp = await v2_retrieve(body=body, db=MagicMock())
         assert len(resp.chunks) == 2
-        assert resp.chunks[0].rerank_score is not None
+        assert resp.chunks[0].vector_score == 0.88
+        assert resp.chunks[0].bm25_score is None
+        assert resp.chunks[0].rrf_score == 0.81
+        assert resp.chunks[0].rerank_score == 0.94
         assert resp.total_retrieved == 2
+        assert resp.trace_id == "trace-retrieve-001"
+        step_types = [c.args[0] for c in _patch_tracer.step.call_args_list]
+        assert "retrieve" in step_types
 
     @pytest.mark.asyncio
     async def test_retrieve_no_kb_ids(self, _patch_hybrid_search):
@@ -252,6 +281,7 @@ class TestRetrieveEndpoint:
             assert resp.chunks == []
             assert resp.total_retrieved == 0
             assert resp.after_rerank == 0
+            assert resp.trace_id == "trace-retrieve-001"
 
     @pytest.mark.asyncio
     async def test_retrieve_with_graph_rag(self, _patch_hybrid_search):
@@ -271,6 +301,20 @@ class TestRetrieveEndpoint:
             resp = await v2_retrieve(body=body, db=MagicMock())
             ner_mock.assert_called_once()
             anchor_mock.assert_called_once()
+            assert resp.trace_id == "trace-retrieve-001"
+
+    @pytest.mark.asyncio
+    async def test_retrieve_error_keeps_trace_id(self):
+        """检索失败软降级为空响应时仍返回 trace_id，便于排查。"""
+        from app.api.v2.endpoints.retrieve import v2_retrieve
+        from app.schemas.v2.retrieve import RetrieveRequest
+
+        with patch("app.api.v2.endpoints.retrieve.hybrid_search", new_callable=AsyncMock) as mock:
+            mock.side_effect = RuntimeError("milvus timeout")
+            body = RetrieveRequest(query="测试", kb_ids=[uuid.uuid4()])
+            resp = await v2_retrieve(body=body, db=MagicMock())
+        assert resp.chunks == []
+        assert resp.trace_id == "trace-retrieve-001"
 
     def test_retrieve_router_registered(self):
         """验证 /retrieve 路由已注册到 V2 router。"""
@@ -356,6 +400,32 @@ class TestRerankEndpoint:
 
 class TestGenerateEndpoint:
     """UQA-03 POST /api/v2/generate 端点测试。"""
+
+    @pytest.mark.asyncio
+    async def test_generate_answer_uses_unified_provider_prefix_resolution(self):
+        """/v2/generate 内部 LLM 调用应复用统一前缀推断。"""
+        from types import SimpleNamespace
+
+        from app.api.v2.endpoints.generate import _generate_answer
+
+        resp = MagicMock()
+        resp.choices = [MagicMock(message=MagicMock(content="答案"))]
+        with patch("app.api.v2.endpoints.generate.get_settings") as mock_settings, \
+             patch("litellm.acompletion", new=AsyncMock(return_value=resp)) as mock_acomp:
+            mock_settings.return_value = SimpleNamespace(
+                litellm_model="Qwen/Qwen3-8B",
+                litellm_api_key="sk-test",
+                litellm_api_base="https://api.siliconflow.cn/v1",
+                litellm_timeout=60.0,
+                litellm_num_retries=0,
+            )
+            answer = await _generate_answer(
+                query="测试",
+                context="上下文",
+                enable_citation_prompt=True,
+            )
+        assert answer == "答案"
+        assert mock_acomp.call_args.kwargs["model"] == "openai/Qwen/Qwen3-8B"
 
     @pytest.mark.asyncio
     async def test_generate_with_citation(self):
@@ -478,11 +548,23 @@ class TestT10E2E:
         from app.schemas.v2.retrieve import RetrieveRequest
         from app.rag.hybrid_retriever import HybridSearchResult
 
-        with patch("app.api.v2.endpoints.retrieve.hybrid_search", new_callable=AsyncMock) as mock:
+        with patch("app.api.v2.endpoints.retrieve.hybrid_search", new_callable=AsyncMock) as mock, \
+             patch("app.api.v2.endpoints.retrieve.Tracer") as tracer_cls:
+            tracer = MagicMock()
+            tracer.trace_id = "trace-retrieve-e2e"
+            tracer.__aenter__ = AsyncMock(return_value=tracer)
+            tracer.__aexit__ = AsyncMock(return_value=False)
+            step = MagicMock()
+            step.__enter__ = MagicMock(return_value=step)
+            step.__exit__ = MagicMock(return_value=False)
+            tracer.step = MagicMock(return_value=step)
+            tracer_cls.return_value = tracer
+
             mock.return_value = [
                 HybridSearchResult(
                     chunk_id=10, content="测试内容", document_id="d1",
-                    score=0.92, heading_path=["标题1"], block_type="paragraph",
+                    score=0.92, vector_score=0.85, rrf_score=0.80, rerank_score=0.92,
+                    heading_path=["标题1"], block_type="paragraph",
                     page_number=1, metadata={"filename": "test.pdf"},
                     source_collection="kb_test",
                 ),
@@ -491,7 +573,10 @@ class TestT10E2E:
             resp = await v2_retrieve(body, db=MagicMock())
             assert len(resp.chunks) == 1
             assert resp.chunks[0].rerank_score == 0.92
+            assert resp.chunks[0].rrf_score == 0.80
+            assert resp.chunks[0].vector_score == 0.85
             assert resp.chunks[0].document_name == "test.pdf"
+            assert resp.trace_id == "trace-retrieve-e2e"
 
     @pytest.mark.asyncio
     async def test_rerank_e2e(self):

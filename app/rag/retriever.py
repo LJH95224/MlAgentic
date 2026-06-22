@@ -20,74 +20,22 @@ ToolMessage(status="error")，触发 AGT-04 错误反思链路 —— 本层不�
 from __future__ import annotations
 
 import logging
-import uuid
 
 from langchain_core.tools import tool
 
 from app.agent.context import get_current_kb_ids
-from app.core.config import get_settings
-from app.rag.embedding import aembed_texts
-from app.rag.milvus_client import get_milvus_client
-from app.rag.naming import build_kb_collection_name
+from app.rag.filters import _build_filter_expr, _milvus_str, get_current_role
 
 logger = logging.getLogger(__name__)
 
 
-# ──────────────────── 权限解析（V1.0 占位） ────────────────────
-
-
-def get_current_role() -> str:
-    """获取当前请求的角色。
-
-    V1.0 阶段没有用户体系，直接从 .env 读取 RAG_DEFAULT_ROLE（默认 "ALL"）。
-    3.6 / 后续阶段接入用户体系时，改为从请求上下文（contextvar）解析即可，
-    工具签名无需改动。
-    """
-    return get_settings().rag_default_role
-
-
-# ──────────────────── 过滤表达式拼装 ────────────────────
-
-
-def _milvus_str(value: str) -> str:
-    """把 Python 字符串转成 Milvus filter 可用的双引号字面量。"""
-    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
-    return f'"{escaped}"'
-
-
-def _build_filter_expr(
-    doc_type: str | None,
-    document_id: str | None,
-    entity_tags: list[str] | None,
-    current_role: str,
-) -> str:
-    """拼装 Milvus filter 表达式。
-
-    基线过滤永远包含权限子句（RAG-04）。其他过滤按传参可选叠加。
-
-    Milvus filter 语法注意：
-      - 字符串值要带双引号
-      - 数组包含用 ARRAY_CONTAINS(field, value) 单个 / ARRAY_CONTAINS_ANY(field, [list]) 任一
-      - JSON 字段访问用 metadata["key"]
-      - 多条件用小写 and 连接
-    """
-    # 权限基线：硬编码注入（不暴露给 LLM）
-    clauses = [f"ARRAY_CONTAINS(allowed_roles, {_milvus_str(current_role)})"]
-
-    if doc_type:
-        # JSON 字段访问 + 字符串等值
-        clauses.append(f'metadata["type"] == {_milvus_str(doc_type)}')
-
-    if document_id:
-        clauses.append(f"document_id == {_milvus_str(document_id)}")
-
-    if entity_tags:
-        # KG-04 图谱锚定后注入：召回任一标签匹配的 chunk
-        # 用 Python 列表字面量语法序列化为 Milvus 接受的格式
-        tags_lit = "[" + ", ".join(_milvus_str(t) for t in entity_tags) + "]"
-        clauses.append(f"ARRAY_CONTAINS_ANY(entity_tags, {tags_lit})")
-
-    return " and ".join(clauses)
+# ──────────────────── 权限解析 / 过滤表达式（共享） ────────────────────
+#
+# get_current_role / _milvus_str / _build_filter_expr 现在统一住在
+# app.rag.filters，V1（本模块）和 V2（hybrid_retriever）都从那里取，
+# 避免跨版本去 import 私有名（P2-13）。
+# 这里保留 re-export 是为了保持对外契约不变（外部代码 / 单测都仍按
+# `from app.rag.retriever import _build_filter_expr, get_current_role` 导入）。
 
 
 # ──────────────────── 结果格式化 ────────────────────
@@ -133,18 +81,17 @@ async def _do_search(
     document_id: str | None,
     entity_tags: list[str] | None,
 ) -> str:
-    """实际检索：embed → search → format。被 @tool 包装的 async 函数复用。
+    """实际检索：复用 V2 混合检索链路并格式化给 Agent。
 
-    V1.5 KB-06 改造：
-    - 从 contextvar 读 current_kb_ids 决定查哪些 Collection：
-      - None（请求未传 kb_ids）→ 走 V1.0 默认 `knowledge_chunks` Collection（向后兼容）
-      - []（明确空）→ 直接返"无结果"，不查 Milvus
-      - [...]（非空）→ 在每个 KB Collection 上分别 search，结果合并按 score 重排取 top_k
+    Agent Tool 与 `/api/v2/query` 共用 `hybrid_search`，避免 ReAct 主动检索仍停留在
+    V1 纯向量路径，导致 BM25、RRF、Reranker、结构字段在 Agent 场景不可用。
     """
-    settings = get_settings()
-    client = get_milvus_client()
-    current_role = get_current_role()
+    from app.rag.hybrid_retriever import format_hybrid_results, hybrid_search
+
     current_kb_ids = get_current_kb_ids()
+    if current_kb_ids == []:
+        logger.info("search_knowledge_base: kb_ids=[] 显式空，跳过检索")
+        return "（本轮对话未指定知识库，无可检索内容。）"
 
     # 入参校验（防御性）：LLM 偶尔会传不合理的 top_k
     if top_k < 1:
@@ -152,87 +99,24 @@ async def _do_search(
     if top_k > 50:
         top_k = 50
 
-    # ── 决定查询的 Collection 列表 ─────────────────────────
-    target_collections: list[str]
-    if current_kb_ids is None:
-        # V1.0 默认行为：查 `knowledge_chunks` 单 Collection
-        target_collections = [settings.milvus_collection]
-    elif len(current_kb_ids) == 0:
-        # 明确"不查任何 KB"
-        logger.info("search_knowledge_base: kb_ids=[] 显式空，跳过检索")
-        return "（本轮对话未指定知识库，无可检索内容。）"
-    else:
-        # V1.5 KB-06：跨 KB Collection 查询
-        target_collections = [build_kb_collection_name(kb) for kb in current_kb_ids]
-
-    # 1) 文本 → 向量（异步调用 Embedding API）
-    vectors = await aembed_texts([query])
-    query_vec = vectors[0]
-
-    # 2) 拼过滤表达式
-    filter_expr = _build_filter_expr(doc_type, document_id, entity_tags, current_role)
     logger.info(
-        "search_knowledge_base: query=%r top_k=%d kb_ids=%s collections=%s filter=%s",
+        "search_knowledge_base: query=%r top_k=%d kb_ids=%s doc_type=%s document_id=%s entity_tags=%d",
         query[:60],
         top_k,
         current_kb_ids,
-        target_collections,
-        filter_expr,
+        doc_type,
+        document_id,
+        len(entity_tags or []),
     )
 
-    # 3) 多 Collection 检索 + 合并 + 重排
-    all_hits: list[dict] = []
-    for collection in target_collections:
-        # collection 不存在时跳过（容错：用户传了不存在的 kb_id 不应让整批失败）
-        if not client.has_collection(collection):
-            logger.warning(
-                "search_knowledge_base: collection=%s 不存在，跳过", collection
-            )
-            continue
-        try:
-            raw = client.search(
-                collection_name=collection,
-                data=[query_vec],
-                filter=filter_expr,
-                limit=top_k,
-                output_fields=[
-                    "chunk_id",
-                    "content",
-                    "document_id",
-                    "metadata",
-                    "entity_tags",
-                ],
-                search_params={"metric_type": "COSINE", "params": {"ef": 64}},
-            )
-        except Exception as e:  # noqa: BLE001
-            logger.warning(
-                "search_knowledge_base: collection=%s 检索失败（跳过）: %s",
-                collection,
-                e,
-            )
-            continue
-
-        # raw 结构：list[list[dict]]，外层每个 query 一个结果列表
-        hits_in_collection = raw[0] if raw else []
-        # 给每条结果标注来源 collection，便于多 KB 场景调试与前端展示
-        for h in hits_in_collection:
-            if isinstance(h, dict):
-                h.setdefault("_source_collection", collection)
-        all_hits.extend(hits_in_collection)
-
-    # 4) 合并重排（按 distance / score 排序）
-    # Milvus COSINE 的 distance 越大越相似（1 - cos_sim ∈ [0, 2]，但 metric=COSINE
-    # 模式下返回的 distance 实际是 cos_sim 本身，0~1）；保险起见按 distance 降序取 top_k
-    all_hits.sort(key=lambda h: h.get("distance", 0.0), reverse=True)
-    merged = all_hits[:top_k]
-    logger.info(
-        "search_knowledge_base: 跨 %d collection 合并后命中 %d 条（top_k=%d）",
-        len(target_collections),
-        len(merged),
-        top_k,
+    results = await hybrid_search(
+        query=query,
+        top_k=top_k,
+        doc_type=doc_type,
+        document_id=document_id,
+        entity_tags=entity_tags,
     )
-
-    return _format_hits(merged)
+    return format_hybrid_results(results)
 
 
 # ──────────────────── 暴露给 LLM 的 Tool ────────────────────

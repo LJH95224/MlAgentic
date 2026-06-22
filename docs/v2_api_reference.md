@@ -1,1167 +1,569 @@
-# TyAgent V2.0 · 接口文档
+# TyAgent · 全项目接口文档
 
-> **基线版本**：V2.0 Hermes（2026-06-17 全链路 smoke 验收通过）
-> **配套文档**：[PRD](TyAgent%20V2.0%20%C2%B7%20%E9%9C%80%E6%B1%82%E8%A7%84%E6%A0%BC%E8%AF%B4%E6%98%8E%E4%B9%A6.md) · [架构 V2.0 章节](architecture.md#第三部分--v20-hermes-增量) · [开发计划](v2_dev_plan.md) · [进度](progress.md) · [前端联调](v2_frontend_guide.md)
-> **V1.5 接口**：[v1_5_api_reference.md](v1_5_api_reference.md)（V2.0 不重写 V1.5 接口，只新增 V2 接口与 V1 接口字段扩展）
-> **在线交互**：服务启动后访问 [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)（Swagger UI）
+> **适用范围**：当前后端实际注册的全部接口（V1.0 / V1.5 / V2.0），不再只面向 V2.0 Hermes。
+> **代码依据**：路由聚合见 [app/api/v1/router.py](../app/api/v1/router.py) 与 [app/api/v2/router.py](../app/api/v2/router.py)，应用挂载见 [app/main.py](../app/main.py)。
+> **在线交互**：服务启动后访问 [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs) / [http://127.0.0.1:8000/redoc](http://127.0.0.1:8000/redoc)。
+> **历史说明**：本文沿用 `v2_api_reference.md` 文件名，但内容已调整为“全项目接口对接文档”。
 
 ---
 
-## 0. 通用约定
+## 0. 接口状态总览
 
-### 0.1 BaseURL & 路径前缀
+### 0.1 BaseURL
 
 | 环境 | URL |
 |---|---|
-| 开发 | `http://127.0.0.1:8000` |
-| 测试/生产 | 由部署方决定（V1 接口保持 `/api/v1`，V2 接口保持 `/api/v2` 前缀） |
+| 本地开发 | `http://127.0.0.1:8000` |
+| 测试/生产 | 由部署方决定，接口路径保持 `/api/v1`、`/api/v2` 前缀 |
 
-V2.0 新增端点全部挂载在 `/api/v2` 路径下。V1.5 已有接口路径不变，详见 [V1.5 接口文档](v1_5_api_reference.md)。
+### 0.2 响应格式现实约定
 
-### 0.2 响应格式
+当前项目存在两类成功响应形态，前端对接时需要区分：
 
-沿用 V1.5 的统一响应格式，详见 [V1.5 §0.2](v1_5_api_reference.md#02-统一响应格式prd-§71)。
+| 接口范围 | 成功响应 | 失败响应 |
+|---|---|---|
+| `/api/v1/**` | 统一 `{code, message, data}` | 统一 `{code, message, data:null}` |
+| `/api/v2/analytics` | 统一 `{code, message, data}` | 统一 `{code, message, data:null}` |
+| `/api/v2/query`、`/api/v2/retrieve`、`/api/v2/generate`、`/api/v2/rerank`、`/api/v2/traces/**`、`/api/v2/knowledge-bases/**/evaluate*` | 直接返回业务对象（不包 `code/data`） | 统一异常处理器返回 `{code, message, data:null}` |
+| `/health` | `{"status":"ok"}` | 标准 HTTP 错误 |
+| `/api/v1/chat/stream` | SSE 事件流 | 建流前失败返回 `{code, message, data:null}` |
 
-所有 REST 接口一律返回 `{code, message, data}` 包裹结构。仅 `/v1/chat/stream` 的 200 响应是 SSE 流。
+前端建议封装一个兼容解析函数：
 
-```json
-// 成功
-{
-  "code": 0,
-  "message": "success",
-  "data": { ... }
-}
-
-// 失败
-{
-  "code": 40011,
-  "message": "query_rewrite 参数值不在枚举范围内",
-  "data": null
+```ts
+function unwrap<T>(resp: T | { code: number; message: string; data: T }): T {
+  if (resp && typeof resp === 'object' && 'code' in resp && 'data' in resp) {
+    const boxed = resp as { code: number; message: string; data: T };
+    if (boxed.code !== 0) throw new Error(boxed.message);
+    return boxed.data;
+  }
+  return resp as T;
 }
 ```
 
-### 0.3 错误码（V2 新增 4 个）
+### 0.3 通用错误码
 
-V1.5 的错误码总表见 [V1.5 §0.3](v1_5_api_reference.md#03-业务错误码表prd-§72)。以下仅列出 V2.0 **新增**的业务错误码：
+| HTTP | 业务 code | 含义 | 常见触发场景 |
+|---|---:|---|---|
+| 400 | 40001 | PARAM_INVALID | 参数校验失败、空字符串、分页越界等 |
+| 400 | 40002 | IMMUTABLE_FIELD | 修改只读字段 |
+| 400 | 40011 | QUERY_REWRITE_INVALID | `query_rewrite` 不是 `none` / `hyde` / `multi_query` |
+| 400 | 40012 | EVAL_DATASET_EMPTY | 评估集为空 |
+| 400 | 40013 | EVAL_DATASET_TOO_LARGE | 评估题数超过 `EVAL_MAX_QUESTIONS` |
+| 404 | 40400 | NOT_FOUND | session / kb / file / trace / eval_task 不存在 |
+| 409 | 40900 | NAME_CONFLICT | 知识库名称冲突 |
+| 413 | 41300 | FILE_TOO_LARGE | 上传文件超过限制 |
+| 415 | 41500 | UNSUPPORTED_MEDIA | 上传了不支持的文件类型 |
+| 422 | 42200 | EMBEDDING_DIM_MISMATCH | 向量维度不匹配 |
+| 422 | 42201 | CONTEXT_CHUNKS_EMPTY | `/api/v2/generate` 的 `context_chunks` 为空 |
+| 500 | 50000 | INTERNAL_ERROR | 未捕获内部错误 |
+| 503 | 50300 | CELERY_UNAVAILABLE | Redis / Celery worker 不可用 |
 
-| HTTP | 业务 code | 含义 | 触发场景 |
+### 0.4 当前仍在使用的接口
+
+| 模块 | Method | Path | 状态 | 前端用途 |
+|---|---|---|---|---|
+| 健康检查 | GET | `/health` | ✅ 使用中 | 服务可用性探测 |
+| 会话 | POST | `/api/v1/sessions` | ✅ 使用中 | 创建会话 |
+| 会话 | GET | `/api/v1/sessions` | ✅ 使用中 | 会话列表 |
+| 会话 | GET | `/api/v1/sessions/{session_id}` | ✅ 使用中 | 会话详情 |
+| 会话 | PATCH | `/api/v1/sessions/{session_id}` | ✅ 使用中 | 修改标题 |
+| 会话 | DELETE | `/api/v1/sessions/{session_id}` | ✅ 使用中 | 删除会话 |
+| 会话 | GET | `/api/v1/sessions/{session_id}/messages` | ✅ 使用中 | 历史消息 |
+| 会话 | POST | `/api/v1/sessions/{session_id}/summarize` | ✅ 使用中 | 主动生成摘要 |
+| 对话 | POST | `/api/v1/chat/stream` | ✅ 使用中 | 流式 Agent 对话 |
+| 知识库 | POST | `/api/v1/knowledge-bases` | ✅ 使用中 | 创建 KB |
+| 知识库 | GET | `/api/v1/knowledge-bases` | ✅ 使用中 | KB 列表 |
+| 知识库 | GET | `/api/v1/knowledge-bases/{kb_id}` | ✅ 使用中 | KB 详情 |
+| 知识库 | PATCH | `/api/v1/knowledge-bases/{kb_id}` | ✅ 使用中 | 修改 KB / 检索配置 |
+| 知识库 | DELETE | `/api/v1/knowledge-bases/{kb_id}` | ✅ 使用中 | 删除 KB |
+| 文件 | POST | `/api/v1/knowledge-bases/{kb_id}/files` | ✅ 使用中 | 上传文件并入库 |
+| 文件 | GET | `/api/v1/knowledge-bases/{kb_id}/files` | ✅ 使用中 | 文件列表 |
+| 文件 | GET | `/api/v1/knowledge-bases/{kb_id}/files/{file_id}` | ✅ 使用中 | 文件详情/入库进度 |
+| 文件 | DELETE | `/api/v1/knowledge-bases/{kb_id}/files/{file_id}` | ✅ 使用中 | 删除文件 |
+| 文件 | POST | `/api/v1/knowledge-bases/{kb_id}/files/{file_id}/reindex` | ✅ 使用中 | 重新入库 |
+| RAG 查询 | POST | `/api/v2/query` | ✅ 使用中 | 非流式可信 RAG 问答 |
+| RAG 子能力 | POST | `/api/v2/retrieve` | ✅ 使用中 | 纯检索调试/自定义链路 |
+| RAG 子能力 | POST | `/api/v2/generate` | ✅ 使用中 | 自带上下文生成答案 |
+| RAG 子能力 | POST | `/api/v2/rerank` | ✅ 使用中 | 独立文本精排 |
+| Trace | GET | `/api/v2/traces/{trace_id}` | ✅ 使用中 | 单次请求链路详情 |
+| Trace | GET | `/api/v2/traces/sessions/{session_id}/traces` | ✅ 使用中 | 会话下 trace 列表 |
+| 评估 | POST | `/api/v2/knowledge-bases/{kb_id}/evaluate` | ✅ 使用中 | 创建 RAGAS 评估任务 |
+| 评估 | GET | `/api/v2/knowledge-bases/{kb_id}/evaluations/{eval_task_id}` | ✅ 使用中 | 评估进度/结果 |
+| 评估 | GET | `/api/v2/knowledge-bases/{kb_id}/evaluations` | ✅ 使用中 | 评估历史 |
+| Analytics | GET | `/api/v2/analytics` | ✅ 使用中 | 查询质量仪表盘 |
+
+### 0.5 接口取舍与替换关系
+
+整理前端对接时，按下面规则处理“旧接口 / 新接口 / 不用接口”：
+
+| 原接口/能力 | 当前处理 | 使用哪个接口 | 说明 |
 |---|---|---|---|
-| 400 | 40011 | QUERY_REWRITE_INVALID | `options.query_rewrite` 不是 `none` / `hyde` / `multi_query` 之一（HRE-01 / PRD §1127） |
-| 400 | 40012 | EVAL_DATASET_EMPTY | 评估时 `eval_set` 为空数组（EVA-01 / PRD §805） |
-| 400 | 40013 | EVAL_DATASET_TOO_LARGE | 评估题数超出 `EVAL_MAX_QUESTIONS` 上限（默认 100）（EVA-01） |
-| 422 | 42201 | CONTEXT_CHUNKS_EMPTY | `/v2/generate` 的 `context_chunks` 为空（UQA-03 / PRD §1129） |
+| `POST /api/v1/chat/stream` | ✅ 继续使用 | `POST /api/v1/chat/stream` | 仍是当前唯一流式聊天接口，主聊天页、打字机效果、工具徽章都用它 |
+| `POST /api/v2/query` | ✅ 新增使用 | `POST /api/v2/query` | 不是替代 V1 流式聊天，而是用于非流式可信 RAG：Citation、confidence、trace |
+| “聊天时不传 `kb_ids`” | ⚠️ 不推荐 | 仍用 `/api/v1/chat/stream`，但显式传 `kb_ids` | 新前端必须明确传当前选中 KB；纯聊天传 `[]`，不要依赖 V1.0 全局检索兼容行为 |
+| V1.5 KB CRUD | ✅ 继续使用 | `/api/v1/knowledge-bases/**` | 仍是知识库管理主入口；V2 只扩展了 `retrieval_config` 字段，没有新的 KB CRUD 替代接口 |
+| 旧 KB 更新只改 `name/description` | ✅ 用更新后的同一接口 | `PATCH /api/v1/knowledge-bases/{kb_id}` | 新版同一接口额外支持 `retrieval_config`，用于保存 KB 级检索默认配置 |
+| V1.5 文件接口 | ✅ 继续使用 | `/api/v1/knowledge-bases/{kb_id}/files/**` | 仍是文件管理主入口；新版响应额外有 `summary_brief`、`doc_metadata`、入库 warnings |
+| V1.5 入库任务旧实现 | ❌ 不对接 | 无接口 | `app/tasks/ingest_task_v1.py` 只是历史归档，当前运行入口是新版 V2 入库链路 |
+| `/api/v2/retrieve` | 🛠️ 开发/调试使用 | `POST /api/v2/retrieve` | 不放普通聊天页；用于检索调试、召回诊断、自定义 RAG 链路 |
+| `/api/v2/generate` | 🛠️ 开发/调试使用 | `POST /api/v2/generate` | 前端普通用户不用；仅当开发者自己提供 context_chunks 时使用 |
+| `/api/v2/rerank` | 🛠️ 开发/调试使用 | `POST /api/v2/rerank` | 不作为普通业务页核心接口；当前 reranker 可能配置为 noop |
+| 旧文档里的 `/api/v2/sessions/{session_id}/traces` | ❌ 不用 | `GET /api/v2/traces/sessions/{session_id}/traces` | 实际代码注册路径是 `/api/v2/traces/sessions/{session_id}/traces` |
+| V2 `stream=true` | ❌ 不用 | 无 | `/api/v2/query.options.stream`、`/api/v2/generate.options.stream` 当前都是预留字段，不要在 UI 暴露 |
+| `v1_5_api_reference.md` / `v1_5_frontend_guide.md` | 🗄️ 历史参考 | 本文为准 | 历史分册不再作为前端当前对接入口 |
 
-V1.5 的 `50300 CELERY_UNAVAILABLE` 在 V2 评估接口（§4.1）同样适用。
+### 0.6 已废弃 / 不推荐继续对接的能力
 
-### 0.4 接口总览（11 端点速查表）
-
-| 模块 | Method | Path | 说明 |
+| 类型 | 名称 | 状态 | 说明 |
 |---|---|---|---|
-| **V2 统一查询** | POST | `/api/v2/query` | 统一查询：三层配置合并 -> Query 改写 -> NER -> 图谱锚定 -> 混合检索 -> LLM 生成 -> 溯源/自检 |
-| **V2 分层子接口** | POST | `/api/v2/retrieve` | 纯检索子接口（UQA-02） |
-| | POST | `/api/v2/generate` | 纯生成子接口（UQA-03） |
-| | POST | `/api/v2/rerank` | Reranker 精排子接口（UQA-04） |
-| **V2 可观测性** | GET | `/api/v2/traces/{trace_id}` | 单条 trace 完整步骤链路（OBS-01） |
-| | GET | `/api/v2/traces/sessions/{session_id}/traces` | 某会话的所有 trace 列表（OBS-02） |
-| | GET | `/api/v2/analytics` | 聚合统计（OBS-03） |
-| **V2 RAGAS 评估** | POST | `/api/v2/knowledge-bases/{kb_id}/evaluate` | 创建评估任务（EVA-01，异步执行） |
-| | GET | `/api/v2/knowledge-bases/{kb_id}/evaluations/{eval_task_id}` | 查评估进度 + 结果（EVA-02） |
-| | GET | `/api/v2/knowledge-bases/{kb_id}/evaluations` | 评估历史列表（EVA-03） |
-| **V1 接口扩展** | PATCH | `/api/v1/knowledge-bases/{kb_id}` | V1 接口新增 `retrieval_config` 字段（HRE-06） |
+| 代码归档 | `app/tasks/ingest_task_v1.py` | 🗄️ 历史归档 | V1.5 入库任务旧实现，仅供参考，不再作为运行入口 |
+| 兼容行为 | `/api/v1/chat/stream` 不传 `kb_ids` 的 V1.0 全局检索模式 | ⚠️ 兼容保留，不推荐 | 新前端应显式传入选中的 `kb_ids`；若只想纯聊天，可传空数组 `[]` |
+| 预留字段 | `/api/v2/query.options.stream` | ⚠️ 预留，不可用 | 当前 V2 query 只支持非流式；流式体验仍用 `/api/v1/chat/stream` |
+| 预留字段 | `/api/v2/generate.options.stream` | ⚠️ 预留，不可用 | 当前 generate 只返回一次性 JSON |
+| 旧 Trace 路径 | `/api/v2/sessions/{session_id}/traces` | ❌ 不存在/不用 | 实际路径是 `/api/v2/traces/sessions/{session_id}/traces` |
+| 文档分册 | `v1_5_api_reference.md` / `v1_5_frontend_guide.md` | 🗄️ 历史参考 | 当前对接以本文和 [v2_frontend_guide.md](v2_frontend_guide.md) 为准 |
 
 ---
 
-## 1. V2 统一查询
+## 1. 健康检查
 
-### 1.1 POST /api/v2/query
+### GET /health
 
-**功能**：V2.0 统一查询入口。完整链路：三层配置合并（API > KB > settings）→ Query 改写（HyDE / multi_query）→ Query NER → 图谱锚定 → 混合检索（向量 + BM25 + RRF + Reranker）→ LLM 生成 → Citation 溯源 → 答案自检 → 置信度评分。当前仅支持非流式（同步返回完整 JSON）。
+**功能**：检查 FastAPI 进程是否存活。
 
-**请求体**：
-
-| 字段 | 类型 | 必填 | 默认 | 说明 |
-|---|---|---|---|---|
-| `query` | string | 是 | - | 查询文本，1~2000 字符 |
-| `session_id` | string (UUID) | 否 | null | 关联会话 ID（用于 Trace 绑定） |
-| `kb_ids` | array[string (UUID)] | 否 | null | 限定知识库列表（多 KB 时本期取第一个做配置合并） |
-| `options` | object | 否 | `{}` | 查询选项（见下方 QueryOptions） |
-
-**QueryOptions 字段**（`options` 对象内）：
-
-| 字段 | 类型 | 必填 | 默认 | 说明 |
-|---|---|---|---|---|
-| `top_k` | int | 否 | null（跟随下层） | 返回结果数量，1~50 |
-| `reranker_enable` | bool | 否 | null（跟随下层） | 是否启用 Reranker 精排 |
-| `bm25_enable` | bool | 否 | null（跟随下层） | 是否启用 BM25 稀疏检索 |
-| `stream` | bool | 否 | false | 是否使用流式输出（SSE）—— 当前仅支持 false |
-| `query_rewrite` | string | 否 | null（跟随下层） | Query 改写策略：`none` / `hyde` / `multi_query`（HRE-01） |
-| `enable_graph_rag` | bool | 否 | null（跟随下层） | 是否启用 Graph RAG 锚定（HRE-02） |
-| `similarity_threshold` | float | 否 | null（跟随下层） | Reranker 过滤阈值，0.0~1.0（HRE-05） |
-| `enable_faithfulness_check` | bool | 否 | null（跟随下层） | 是否启用答案自检（CHC-04）；None 跟随配置 |
-
-**响应体** `data` 字段：
-
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `answer` | string | 生成的答案文本 |
-| `source_citations` | array[CitationItem] | 引用列表（溯源信息） |
-| `trace_id` | string | 请求追踪 ID（UUID 字符串，可用于 OBS-01/02 查询步骤链路） |
-| `total_latency_ms` | int | 请求总延迟（毫秒） |
-| `rewritten_query` | string | HyDE 改写后的假设性答案（仅 hyde 策略下有值） |
-| `sub_queries` | array[string] | multi_query 拆出的子查询列表（仅 multi_query 策略下有值） |
-| `ner_entities` | array[object] | Query NER 抽取的实体 `[{"name": ..., "type": ...}]` |
-| `graph_anchored_tags` | array[string] | 图谱锚定后注入 Milvus entity_tags 的标签列表 |
-| `confidence` | float | CHC-03 整体置信度（0~1），基于被引用 chunk 的 rerank 分加权 + 引用覆盖率 + 自检惩罚 |
-| `low_confidence_warning` | string | confidence < 0.5 时的预警文案 |
-| `faithfulness_check` | string | CHC-04 自检状态：`ok` / `skipped` / `disabled` |
-| `unverified_claims` | array[object] | 未被支撑的事实声明列表 `[{claim, status, source_text}]` |
-
-**CitationItem 结构**：
-
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `chunk_id` | int | 切片 ID（Milvus INT64 PK） |
-| `document_name` | string | 来源文档名称 |
-| `page_number` | int | 页码 |
-| `heading_path` | array[string] | 标题路径（如 `["第一章", "第一节"]`） |
-| `snippet` | string | 引用片段文本 |
-| `rerank_score` | float | Reranker 精排分数 |
-
-**错误码**：
-
-- `40001` 请求参数校验失败（query 为空 / 超长等）
-- `40011` `query_rewrite` 不是 `none`/`hyde`/`multi_query` 之一（三层合并后最终值不合法）
-- `50000` 服务器内部错误
-
-**示例**：
-
-**示例 1：基础查询（默认选项）**
-
-```bash
-curl -X POST http://127.0.0.1:8000/api/v2/query \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "query": "2024 年台风生成数量",
-    "session_id": "550e8400-e29b-41d4-a716-446655440000",
-    "kb_ids": ["kb-uuid-aaaa-bbbb-cccc-ddddeeee0001"]
-  }'
-```
+**成功响应**：
 
 ```json
-// 响应
-{
-  "code": 0,
-  "message": "success",
-  "data": {
-    "answer": "2024 年西北太平洋和南海共有 **25 个** 台风生成...",
-    "source_citations": [
-      {
-        "chunk_id": 10001,
-        "document_name": "2024年台风年鉴.pdf",
-        "page_number": 3,
-        "heading_path": ["第三章", "台风统计"],
-        "snippet": "2024 年西北太平洋和南海共有 25 个台风生成，较常年偏多...",
-        "rerank_score": 0.912
-      }
-    ],
-    "trace_id": "trc-xxx-yyy-zzz",
-    "total_latency_ms": 1842,
-    "rewritten_query": null,
-    "sub_queries": null,
-    "ner_entities": [{"name": "2024年", "type": "TIME"}, {"name": "台风", "type": "PHENOMENON"}],
-    "graph_anchored_tags": ["typhoon", "2024"],
-    "confidence": 0.87,
-    "low_confidence_warning": null,
-    "faithfulness_check": "disabled",
-    "unverified_claims": null
-  }
-}
-```
-
-**示例 2：HyDE 改写查询**
-
-```bash
-curl -X POST http://127.0.0.1:8000/api/v2/query \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "query": "台风路径预报误差",
-    "options": {
-      "query_rewrite": "hyde",
-      "top_k": 10
-    }
-  }'
-```
-
-```json
-// 响应（data.rewritten_query 有值）
-{
-  "code": 0,
-  "message": "success",
-  "data": {
-    "answer": "台风路径预报误差通常以 24h/48h/72h 平均距离误差衡量...",
-    "rewritten_query": "台风路径预报误差通常以 24h/48h/72h 平均距离误差衡量，2024 年中央气象台 24h 平均路径误差约为 65 公里...",
-    "sub_queries": null,
-    "confidence": 0.92,
-    ...
-  }
-}
-```
-
-**示例 3：multi_query 改写 + 答案自检**
-
-```bash
-curl -X POST http://127.0.0.1:8000/api/v2/query \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "query": "高温预警信号等级",
-    "options": {
-      "query_rewrite": "multi_query",
-      "enable_faithfulness_check": true
-    }
-  }'
-```
-
-```json
-// 响应（data.sub_queries 有值，faithfulness_check 为 ok）
-{
-  "code": 0,
-  "message": "success",
-  "data": {
-    "answer": "高温预警信号分为三个等级...",
-    "sub_queries": [
-      "高温预警信号有哪些等级",
-      "高温预警信号分级标准",
-      "高温预警信号颜色含义"
-    ],
-    "confidence": 0.95,
-    "faithfulness_check": "ok",
-    "unverified_claims": null,
-    ...
-  }
-}
+{"status": "ok"}
 ```
 
 ---
 
-## 2. V2 分层子接口
+## 2. V1 会话与流式对话
 
-### 2.1 POST /api/v2/retrieve
+### 2.1 POST /api/v1/sessions
 
-**功能**：纯检索子接口（UQA-02）。只执行检索（混合检索 + Graph RAG 锚定），不调用 LLM 生成答案。返回经过 RRF 融合 + Reranker 精排处理后的 Chunk 列表。
+**功能**：创建会话。
 
-**请求体**：
-
-| 字段 | 类型 | 必填 | 默认 | 说明 |
-|---|---|---|---|---|
-| `query` | string | 是 | - | 检索查询文本，1~2000 字符 |
-| `kb_ids` | array[string (UUID)] | 否 | null | 限定知识库列表 |
-| `top_k` | int | 否 | 5 | 返回结果数量，1~50 |
-| `enable_graph_rag` | bool | 否 | null | 是否启用 Graph RAG 锚定 |
-| `enable_bm25` | bool | 否 | null | 是否启用 BM25 稀疏检索 |
-| `rerank` | bool | 否 | true | 是否启用 Reranker 精排 |
-| `similarity_threshold` | float | 否 | null | Reranker 过滤阈值，0.0~1.0 |
-
-**响应体** `data` 字段：
-
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `chunks` | array[RetrieveChunkItem] | 检索结果列表（按 rerank_score 降序） |
-| `total_retrieved` | int | Rerank 前检索总命中数 |
-| `after_rerank` | int | Rerank 后保留数 |
-| `trace_id` | string | 追踪 ID（当前为空字符串，预留） |
-| `total_latency_ms` | int | 请求总延迟（毫秒） |
-
-**RetrieveChunkItem 结构**：
-
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `chunk_id` | int | 切片 ID |
-| `content` | string | 切片文本内容 |
-| `document_name` | string | 来源文档名称 |
-| `page_number` | int | 页码 |
-| `heading_path` | array[string] | 标题路径 |
-| `vector_score` | float | 稠密向量检索分数 |
-| `bm25_score` | float | BM25 稀疏检索分数 |
-| `rrf_score` | float | RRF 融合分数 |
-| `rerank_score` | float | Reranker 精排分数（结果按此降序） |
-| `metadata` | object | 原始元数据 |
-
-**错误码**：
-
-- `40001` 请求参数校验失败
-- `50000` 检索过程内部失败（异常时返回空 chunks + total_retrieved=0）
-
-**示例**：
-
-```bash
-curl -X POST http://127.0.0.1:8000/api/v2/retrieve \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "query": "2024 年台风生成数量",
-    "top_k": 3,
-    "rerank": true
-  }'
-```
-
-```json
-// 响应
-{
-  "code": 0,
-  "message": "success",
-  "data": {
-    "chunks": [
-      {
-        "chunk_id": 10001,
-        "content": "2024 年西北太平洋和南海共有 25 个台风生成...",
-        "document_name": "2024年台风年鉴.pdf",
-        "page_number": 3,
-        "heading_path": ["第三章", "台风统计"],
-        "rerank_score": 0.912,
-        "vector_score": 0.845,
-        "bm25_score": 0.723,
-        "rrf_score": 0.089
-      }
-    ],
-    "total_retrieved": 15,
-    "after_rerank": 3,
-    "trace_id": "",
-    "total_latency_ms": 356
-  }
-}
-```
-
-### 2.2 POST /api/v2/generate
-
-**功能**：纯生成子接口（UQA-03）。接受开发者自定义的 `context_chunks`，跳过检索步骤，直接调 LLM 生成答案 + Citation 溯源 + 答案自检。**不触发任何 Milvus / Neo4j 查询**。
-
-**请求体**：
-
-| 字段 | 类型 | 必填 | 默认 | 说明 |
-|---|---|---|---|---|
-| `query` | string | 是 | - | 查询文本，1~2000 字符 |
-| `context_chunks` | array[ContextChunk] | 是 | - | 自定义上下文块列表（至少 1 条，否则 42201） |
-| `options` | object | 否 | `{}` | 生成选项 |
-
-**ContextChunk 结构**（`context_chunks` 数组元素）：
-
-| 字段 | 类型 | 必填 | 默认 | 说明 |
-|---|---|---|---|---|
-| `chunk_id` | string | 是 | - | 上下文块唯一标识（≥1 字符） |
-| `content` | string | 是 | - | 上下文文本内容（≥1 字符） |
-| `source_label` | string | 否 | "" | 来源标签（如 "采购合同_2024.pdf P3"），用于 Citation 映射 |
-
-**GenerateOptions 字段**（`options` 对象内）：
-
-| 字段 | 类型 | 必填 | 默认 | 说明 |
-|---|---|---|---|---|
-| `stream` | bool | 否 | false | 是否流式输出（预留，暂不支持） |
-| `enable_citation` | bool | 否 | true | 是否启用 Citation 溯源 |
-| `enable_faithfulness_check` | bool | 否 | false | 是否启用答案自检 |
-
-**响应体** `data` 字段：
-
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `answer` | string | 生成的答案文本 |
-| `source_citations` | array[CitationItem] | 引用列表（与 §1.1 同结构） |
-| `confidence` | float | 置信度（0~1） |
-| `low_confidence_warning` | string | 低置信度预警文案 |
-| `faithfulness_check` | string | 自检状态：`ok` / `skipped` / `disabled` |
-| `unverified_claims` | array[object] | 未被支撑的事实声明列表 |
-| `trace_id` | string | 追踪 ID（当前为空字符串，预留） |
-| `total_latency_ms` | int | 请求总延迟（毫秒） |
-
-**错误码**：
-
-- `40001` 请求参数校验失败
-- `42201` `context_chunks` 为空列表（至少需要 1 条上下文块）
-- `50000` LLM 生成失败（软降级：返回兜底文案 + confidence=0）
-
-**示例**：
-
-```bash
-curl -X POST http://127.0.0.1:8000/api/v2/generate \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "query": "2024 年台风生成数量是多少？",
-    "context_chunks": [
-      {
-        "chunk_id": "my-chunk-001",
-        "content": "2024 年西北太平洋和南海共有 25 个台风生成，较常年（27.1 个）偏少 2.1 个。",
-        "source_label": "2024年台风统计.pdf P3"
-      },
-      {
-        "chunk_id": "my-chunk-002",
-        "content": "2024 年台风生成位置主要集中在西北太平洋中部海域，其中超强台风 6 个。",
-        "source_label": "2024年台风统计.pdf P4"
-      }
-    ],
-    "options": {
-      "enable_citation": true,
-      "enable_faithfulness_check": true
-    }
-  }'
-```
-
-```json
-// 响应
-{
-  "code": 0,
-  "message": "success",
-  "data": {
-    "answer": "2024 年西北太平洋和南海共有 **25 个** 台风生成[1]，较常年（27.1 个）偏少。其中超强台风 6 个[2]。",
-    "source_citations": [
-      {
-        "chunk_id": null,
-        "document_name": "2024年台风统计.pdf P3",
-        "snippet": "2024 年西北太平洋和南海共有 25 个台风生成...",
-        "rerank_score": null
-      },
-      {
-        "chunk_id": null,
-        "document_name": "2024年台风统计.pdf P4",
-        "snippet": "2024 年台风生成位置主要集中在西北太平洋中部海域...",
-        "rerank_score": null
-      }
-    ],
-    "confidence": 0.93,
-    "faithfulness_check": "ok",
-    "trace_id": "",
-    "total_latency_ms": 2105
-  }
-}
-```
-
-### 2.3 POST /api/v2/rerank
-
-**功能**：独立 Reranker 精排子接口（UQA-04）。接受 Query + 候选文本列表，返回按 `rerank_score` **降序**排列的精排结果。允许开发者将 Hermes 的 Reranker 能力独立使用。
-
-**请求体**：
-
-| 字段 | 类型 | 必填 | 默认 | 说明 |
-|---|---|---|---|---|
-| `query` | string | 是 | - | 查询文本，1~2000 字符 |
-| `candidates` | array[RerankCandidate] | 是 | - | 候选文本列表（至少 1 条） |
-| `top_n` | int | 否 | 5 | 返回的最大数量，1~50 |
-
-**RerankCandidate 结构**（`candidates` 数组元素）：
+**请求体**（可省略）：
 
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---|---|
-| `id` | string | 是 | 候选文本唯一标识（≥1 字符） |
-| `text` | string | 是 | 候选文本内容（≥1 字符） |
+| `title` | string | 否 | 初始标题；不传则后续首轮对话可异步生成 |
 
-**响应体** `data` 字段：
-
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `results` | array[RerankResultItem] | 按 `rerank_score` **降序**排列的结果列表 |
-| `total_latency_ms` | int | 请求总延迟（毫秒） |
-
-**RerankResultItem 结构**：
-
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `id` | string | 候选文本标识（与请求中的 `id` 对应） |
-| `text` | string | 候选文本内容 |
-| `rerank_score` | float | 精排分数（降序排列） |
-
-**错误码**：
-
-- `40001` 请求参数校验失败
-- `50000` Reranker 调用失败（软降级：返回原顺序，分数标 0.0）
-
-**示例**：
-
-```bash
-curl -X POST http://127.0.0.1:8000/api/v2/rerank \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "query": "2024 年台风生成数量",
-    "candidates": [
-      {"id": "doc1", "text": "2024 年西北太平洋和南海共有 25 个台风生成。"},
-      {"id": "doc2", "text": "台风是一种强烈的热带气旋。"},
-      {"id": "doc3", "text": "2024 年台风造成经济损失约 500 亿元。"}
-    ],
-    "top_n": 3
-  }'
-```
+**成功响应**：`ApiResponse<SessionDetail>`，HTTP 201。
 
 ```json
-// 响应（按 rerank_score 降序）
 {
   "code": 0,
   "message": "success",
   "data": {
-    "results": [
-      {"id": "doc1", "text": "2024 年西北太平洋和南海共有 25 个台风生成。", "rerank_score": 0.952},
-      {"id": "doc3", "text": "2024 年台风造成经济损失约 500 亿元。", "rerank_score": 0.734},
-      {"id": "doc2", "text": "台风是一种强烈的热带气旋。", "rerank_score": 0.215}
-    ],
-    "total_latency_ms": 128
+    "id": "550e8400-e29b-41d4-a716-446655440000",
+    "title": null,
+    "summary": null,
+    "message_count": 0,
+    "created_at": "2026-06-18T10:00:00+00:00",
+    "updated_at": "2026-06-18T10:00:00+00:00"
   }
 }
+```
+
+### 2.2 GET /api/v1/sessions
+
+**Query 参数**：`page` 默认 1，`page_size` 默认 20，范围 1~100。
+
+**成功响应**：`ApiResponse<SessionListResponse>`。
+
+### 2.3 GET /api/v1/sessions/{session_id}
+
+**功能**：查询会话详情。不存在返回 `40400`。
+
+### 2.4 PATCH /api/v1/sessions/{session_id}
+
+**功能**：修改会话标题。
+
+```json
+{"title": "新的会话标题"}
+```
+
+### 2.5 DELETE /api/v1/sessions/{session_id}
+
+**功能**：物理删除会话及其消息。不会删除知识库、Milvus 或 Neo4j 数据。
+
+### 2.6 GET /api/v1/sessions/{session_id}/messages
+
+**功能**：按 `created_at` 正序返回历史消息。
+
+| 参数 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| `limit` | int | 20 | 1~100 |
+| `before` | UUID | 无 | 游标：返回该消息之前的更早消息 |
+
+**响应 data**：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `items` | MessageItem[] | 消息列表 |
+| `has_more` | bool | 是否还有更早消息 |
+| `next_before` | UUID/null | 下一页游标 |
+
+### 2.7 POST /api/v1/sessions/{session_id}/summarize
+
+**功能**：主动触发会话摘要生成，立即返回 Celery `task_id`，后台更新 `summary` / `summarized_at`。
+
+**成功响应**：HTTP 202。
+
+```json
+{
+  "code": 0,
+  "message": "摘要生成任务已提交",
+  "data": {"task_id": "celery-task-id"}
+}
+```
+
+### 2.8 POST /api/v1/chat/stream
+
+**功能**：SSE 流式 Agent 对话。适合正式聊天页面的打字机体验、工具调用徽章展示。
+
+**请求体**：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `session_id` | UUID | 是 | 会话 ID |
+| `content` | string | 是 | 用户输入 |
+| `kb_ids` | UUID[]/null | 否 | 推荐显式传入当前选中的 KB 列表；空数组表示不检索 KB |
+
+**SSE 事件**：
+
+| event | data.type | 说明 |
+|---|---|---|
+| `message` | `text` | 文本增量，字段 `content` |
+| `control` | `tool_start` | 工具开始，字段 `tool`、`args` |
+| `control` | `tool_end` | 工具结束，字段 `tool`、`output` |
+| `message` | `done` | 流结束 |
+
+**curl 示例**：
+
+```bash
+curl -N -X POST http://127.0.0.1:8000/api/v1/chat/stream \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "session_id": "550e8400-e29b-41d4-a716-446655440000",
+    "content": "总结这个知识库里的台风资料",
+    "kb_ids": ["11111111-1111-1111-1111-111111111111"]
+  }'
 ```
 
 ---
 
-## 3. V2 可观测性
+## 3. V1 知识库管理
 
-### 3.1 GET /api/v2/traces/{trace_id}
+### 3.1 POST /api/v1/knowledge-bases
 
-**功能**：获取单条 trace 的完整步骤链路（OBS-01）。`trace_id` 来自 `/v2/query` 响应中的 `trace_id` 字段。
+**功能**：创建知识库，同步创建 PostgreSQL 记录与 Milvus Collection。
 
-**路径参数**：
+**请求体**：
 
-| 参数 | 类型 | 必填 | 说明 |
-|---|---|---|---|
-| `trace_id` | string | 是 | 追踪 ID（UUID 字符串） |
-
-**响应体** `data` 字段：
-
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `trace_id` | string | 追踪 ID |
-| `session_id` | string (UUID) | 关联会话 ID |
-| `kb_id` | string (UUID) | 关联知识库 ID |
-| `total_latency_ms` | int | 总延迟（毫秒，从根步骤取） |
-| `steps` | array[TraceStepItem] | 步骤列表（按 created_at 升序） |
-| `created_at` | string (ISO 8601) | 创建时间 |
-
-**TraceStepItem 结构**：
-
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `id` | string (UUID) | 步骤 ID |
-| `step_type` | string | 步骤类型（如 `query_rewrite`、`query_ner`、`graph_anchor`、`retrieve`、`build_context`、`generate`、`citation_parse`、`faithfulness_check`） |
-| `parent_step` | string | 父步骤 ID（根步骤为 null） |
-| `step_latency_ms` | int | 本步骤耗时（毫秒） |
-| `step_input` | object | 步骤输入参数 |
-| `step_output` | object | 步骤输出结果 |
-| `model_name` | string | LLM 模型名称（LLM 步骤有值） |
-| `token_count` | int | Token 消耗数（LLM 步骤有值） |
-| `error_message` | string | 错误信息（步骤失败时有值） |
-| `created_at` | string (ISO 8601) | 步骤创建时间 |
-
-**错误码**：
-
-- `404`（HTTP 404）trace_id 不存在（直接抛 HTTPException，非 BusinessError）
-
-**示例**：
-
-```bash
-curl http://127.0.0.1:8000/api/v2/traces/trc-xxx-yyy-zzz
-```
-
-```json
-// 响应
-{
-  "code": 0,
-  "message": "success",
-  "data": {
-    "trace_id": "trc-xxx-yyy-zzz",
-    "session_id": "550e8400-e29b-41d4-a716-446655440000",
-    "kb_id": "kb-uuid-aaaa-bbbb-cccc-ddddeeee0001",
-    "total_latency_ms": 1842,
-    "steps": [
-      {
-        "id": "step-1111",
-        "step_type": "query_rewrite",
-        "parent_step": null,
-        "step_latency_ms": 150,
-        "step_input": {"strategy": "none", "query_len": 12},
-        "step_output": {"rewritten_len": 0, "sub_query_count": 0},
-        "model_name": null,
-        "token_count": null,
-        "error_message": null,
-        "created_at": "2026-06-17T10:00:00.123+00:00"
-      },
-      {
-        "id": "step-2222",
-        "step_type": "generate",
-        "parent_step": null,
-        "step_latency_ms": 1200,
-        "step_input": {"model": "gpt-4o-mini"},
-        "step_output": {"answer_len": 523},
-        "model_name": "gpt-4o-mini",
-        "token_count": 856,
-        "error_message": null,
-        "created_at": "2026-06-17T10:00:01.323+00:00"
-      }
-    ],
-    "created_at": "2026-06-17T10:00:00.100+00:00"
-  }
-}
-```
-
-### 3.2 GET /api/v2/traces/sessions/{session_id}/traces
-
-**功能**：获取某会话的所有 trace 列表（OBS-02），分页返回，不含步骤详情。
-
-**路径参数**：
-
-| 参数 | 类型 | 必填 | 说明 |
-|---|---|---|---|
-| `session_id` | string (UUID) | 是 | 会话 ID |
-
-**Query 参数**：
-
-| 参数 | 类型 | 默认 | 范围 | 说明 |
+| 字段 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
-| `page` | int | 1 | ≥1 | 页码 |
-| `page_size` | int | 20 | 1~100 | 每页条数 |
+| `name` | string | 是 | - | 全局唯一，1~128 字符 |
+| `description` | string/null | 否 | null | ≤500 字符 |
+| `embedding_dim` | int | 否 | 4096 | 创建后不可修改 |
+| `chunk_size` | int | 否 | 512 | 128~2048 |
+| `chunk_overlap` | int | 否 | 64 | 不超过 `chunk_size` 的 50% |
 
-**响应体** `data` 字段：
+**成功响应**：`ApiResponse<KnowledgeBaseDetail>`，HTTP 201。
+
+### 3.2 GET /api/v1/knowledge-bases
+
+**功能**：分页获取知识库列表。
+
+| 参数 | 类型 | 默认 | 范围 |
+|---|---|---|---|
+| `page` | int | 1 | ≥1 |
+| `page_size` | int | 20 | 1~100 |
+
+### 3.3 GET /api/v1/knowledge-bases/{kb_id}
+
+**功能**：获取知识库详情，包含 `file_count`、`chunk_count`、`entity_count`、`retrieval_config`。
+
+### 3.4 PATCH /api/v1/knowledge-bases/{kb_id}
+
+**功能**：修改知识库名称、描述，以及 V2 检索默认配置。`embedding_dim` / `chunk_size` / `chunk_overlap` 创建后只读，不允许修改。
+
+**请求体**：三者至少传一个。
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
-| `items` | array[TraceListItem] | trace 列表（按 created_at 倒序） |
-| `total` | int | 总数 |
-| `page` | int | 当前页码 |
-| `page_size` | int | 每页条数 |
+| `name` | string | 新名称 |
+| `description` | string/null | 新描述；显式 null 表示清空 |
+| `retrieval_config` | object/null | V2 检索配置；`{}` 清空覆盖字段 |
 
-**TraceListItem 结构**：
+`retrieval_config` 支持字段：
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
-| `trace_id` | string | 追踪 ID |
-| `session_id` | string (UUID) | 关联会话 ID |
-| `kb_id` | string (UUID) | 关联知识库 ID |
-| `total_latency_ms` | int | 总延迟（毫秒） |
-| `step_count` | int | 步骤数 |
-| `created_at` | string (ISO 8601) | 创建时间 |
+| `top_k` | int | 默认返回结果数 |
+| `reranker_enable` | bool | 是否启用 Reranker |
+| `bm25_enable` | bool | 是否启用 BM25 |
+| `query_rewrite` | string | `none` / `hyde` / `multi_query` |
+| `enable_graph_rag` | bool | 是否启用 Graph RAG |
+| `enable_faithfulness_check` | bool | 是否启用答案自检 |
+| `similarity_threshold` | float | Reranker 过滤阈值 |
+| `rerank_top_n` | int | Reranker 候选输入数 |
+
+配置合并优先级：`API options > KB.retrieval_config > 全局 settings`。
+
+### 3.5 DELETE /api/v1/knowledge-bases/{kb_id}
+
+**功能**：删除知识库及其相关资源。不可撤销，前端必须二次确认。
+
+---
+
+## 4. V1 文件管理与异步入库
+
+### 4.1 POST /api/v1/knowledge-bases/{kb_id}/files
+
+**功能**：上传文件并触发 Celery 异步入库。不会等待解析/切片/向量化完成。
+
+**请求格式**：`multipart/form-data`，字段名 `file`。
+
+**成功响应**：`ApiResponse<FileDetail>`，HTTP 201，初始 `status=pending`、`progress=0`。
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/knowledge-bases/{kb_id}/files \
+  -F 'file=@./docs/sample.pdf'
+```
+
+### 4.2 GET /api/v1/knowledge-bases/{kb_id}/files
+
+**功能**：分页获取文件列表。
+
+**列表项关键字段**：`id`、`filename`、`file_size`、`mime_type`、`status`、`progress`、`chunk_count`、`summary_brief`、`created_at`、`completed_at`。
+
+### 4.3 GET /api/v1/knowledge-bases/{kb_id}/files/{file_id}
+
+**功能**：查询文件详情和入库进度。前端可每 2 秒轮询，直到 `status=completed|failed`。
+
+**详情额外字段**：`entity_count`、`doc_metadata`、`error_message`、`celery_task_id`。
+
+`doc_metadata` 常见字段：`doc_type`、`doc_date`、`language`、`key_topics`、`summary_brief`；失败补偿场景可能带 `_ingest_warnings`。
+
+### 4.4 DELETE /api/v1/knowledge-bases/{kb_id}/files/{file_id}
+
+**功能**：删除文件及其切片、图谱、磁盘文件、PG 记录。
+
+### 4.5 POST /api/v1/knowledge-bases/{kb_id}/files/{file_id}/reindex
+
+**功能**：重新入库。会清理旧切片、重置状态并触发新 Celery 任务。
+
+---
+
+## 5. V2 可信 RAG 查询接口
+
+### 5.1 POST /api/v2/query
+
+**功能**：统一 RAG 查询入口。执行三层配置合并 → Query 改写 → NER → 图谱锚定 → 混合检索 → LLM 生成 → Citation → 置信度/自检 → Trace/Analytics。
+
+**成功响应形态**：直接返回 `QueryResponse`，不包 `code/data`。
+
+**请求体**：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `query` | string | 是 | 1~2000 字符 |
+| `session_id` | UUID/null | 否 | 用于 trace 绑定到会话 |
+| `kb_ids` | UUID[]/null | 否 | 推荐传当前 KB；多 KB 时当前配置合并取第一个 KB |
+| `options` | QueryOptions | 否 | 查询选项 |
+
+**QueryOptions**：
+
+| 字段 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| `top_k` | int/null | 跟随下层 | 1~50 |
+| `reranker_enable` | bool/null | 跟随下层 | 是否启用精排 |
+| `bm25_enable` | bool/null | 跟随下层 | 是否启用 BM25 |
+| `stream` | bool | false | 预留；当前不要传 true |
+| `query_rewrite` | string/null | 跟随下层 | `none` / `hyde` / `multi_query` |
+| `enable_graph_rag` | bool/null | 跟随下层 | 是否启用图谱锚定 |
+| `similarity_threshold` | float/null | 跟随下层 | 0~1 |
+| `enable_faithfulness_check` | bool/null | 跟随下层 | 是否启用答案自检 |
+
+**响应字段**：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `answer` | string | 答案文本，可能包含 `[1]` 引用标记 |
+| `source_citations` | CitationItem[] | 引用来源 |
+| `trace_id` | string/null | 可用于查询 trace |
+| `total_latency_ms` | int/null | 总耗时 |
+| `rewritten_query` | string/null | HyDE 结果 |
+| `sub_queries` | string[]/null | multi_query 子问题 |
+| `ner_entities` | object[]/null | Query NER 结果 |
+| `graph_anchored_tags` | string[]/null | 图谱锚定标签 |
+| `confidence` | float/null | 0~1 置信度 |
+| `low_confidence_warning` | string/null | 低置信度提示 |
+| `faithfulness_check` | string/null | `ok` / `skipped` / `disabled` |
+| `unverified_claims` | object[]/null | 未证实声明 |
+
+**CitationItem**：`chunk_id`、`document_name`、`page_number`、`heading_path`、`snippet`、`rerank_score`。
 
 **示例**：
 
 ```bash
-curl "http://127.0.0.1:8000/api/v2/traces/sessions/550e8400-e29b-41d4-a716-446655440000/traces?page=1&page_size=10"
+curl -X POST http://127.0.0.1:8000/api/v2/query \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "query": "2024 年台风生成数量是多少？",
+    "session_id": "550e8400-e29b-41d4-a716-446655440000",
+    "kb_ids": ["11111111-1111-1111-1111-111111111111"],
+    "options": {
+      "query_rewrite": "none",
+      "top_k": 5,
+      "enable_graph_rag": false,
+      "enable_faithfulness_check": true
+    }
+  }'
 ```
 
+### 5.2 POST /api/v2/retrieve
+
+**功能**：只检索，不调用 LLM。用于调试召回、构建自定义 RAG 链路。
+
+**成功响应形态**：直接返回 `RetrieveResponse`。
+
+**请求体**：`query`、`kb_ids`、`top_k`、`enable_graph_rag`、`enable_bm25`、`rerank`、`similarity_threshold`。
+
+**响应字段**：`chunks`、`total_retrieved`、`after_rerank`、`trace_id`、`total_latency_ms`。
+
+### 5.3 POST /api/v2/generate
+
+**功能**：开发者自带 `context_chunks`，后端只做生成、Citation、置信度、自检；不访问 Milvus / Neo4j。
+
+**成功响应形态**：直接返回 `GenerateResponse`。
+
+**请求体**：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `query` | string | 是 | 用户问题 |
+| `context_chunks` | ContextChunk[] | 是 | 至少 1 条，否则 `42201` |
+| `options.enable_citation` | bool | 否 | 默认 true |
+| `options.enable_faithfulness_check` | bool | 否 | 默认 false |
+| `options.stream` | bool | 否 | 预留；当前不支持 |
+
+### 5.4 POST /api/v2/rerank
+
+**功能**：独立精排。当前生产配置可能为 `RERANKER_TYPE=none`，此时返回 Noop 分数/原序，前端不要把它当作绝对质量指标。
+
+**请求体**：
+
 ```json
-// 响应
 {
-  "code": 0,
-  "message": "success",
-  "data": {
-    "items": [
-      {
-        "trace_id": "trc-xxx-yyy-zzz",
-        "session_id": "550e8400-e29b-41d4-a716-446655440000",
-        "kb_id": "kb-uuid-aaaa-bbbb-cccc-ddddeeee0001",
-        "total_latency_ms": 1842,
-        "step_count": 6,
-        "created_at": "2026-06-17T10:00:00.100+00:00"
-      }
-    ],
-    "total": 1,
-    "page": 1,
-    "page_size": 10
-  }
+  "query": "2024 年台风生成数量",
+  "candidates": [
+    {"id": "doc1", "text": "2024 年共有 25 个台风生成。"},
+    {"id": "doc2", "text": "台风是一种热带气旋。"}
+  ],
+  "top_n": 2
 }
 ```
 
-### 3.3 GET /api/v2/analytics
+**成功响应形态**：直接返回 `{results,total_latency_ms}`。
 
-**功能**：聚合统计（OBS-03）。从 `query_analytics` 快照表做 SQL 聚合，返回系统级统计数据。支持按时间范围和知识库过滤。单次 SQL 查询完成所有聚合。
+---
 
-**Query 参数**：
+## 6. V2 Trace 可观测性
+
+### 6.1 GET /api/v2/traces/{trace_id}
+
+**功能**：查询单条 trace 的完整步骤链路。不存在返回 `40400`。
+
+**成功响应形态**：直接返回 `TraceDetail`。
+
+**TraceStep 字段**：`id`、`step_type`、`parent_step`、`step_latency_ms`、`step_input`、`step_output`、`model_name`、`token_count`、`error_message`、`created_at`。
+
+### 6.2 GET /api/v2/traces/sessions/{session_id}/traces
+
+**功能**：查询某个会话下的 trace 列表。
+
+| 参数 | 类型 | 默认 | 范围 |
+|---|---|---|---|
+| `page` | int | 1 | ≥1 |
+| `page_size` | int | 20 | 1~100 |
+
+---
+
+## 7. V2 RAGAS 评估
+
+### 7.1 POST /api/v2/knowledge-bases/{kb_id}/evaluate
+
+**功能**：创建 RAGAS 评估任务。立即返回 `eval_task_id`，实际评估由 Celery worker 异步执行。
+
+**成功响应形态**：直接返回 `EvalCreateResponse`。
+
+**请求体**：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `eval_set` | EvalQAItem[] | 是 | QA 对列表，最大 `EVAL_MAX_QUESTIONS` |
+| `retrieval_options` | object | 否 | 评估时检索参数快照 |
+| `name` | string | 否 | 任务名称，≤256 字符 |
+
+**EvalQAItem**：`question`（1~2000 字符）、`ground_truth`（1~4000 字符）。
+
+### 7.2 GET /api/v2/knowledge-bases/{kb_id}/evaluations/{eval_task_id}
+
+**功能**：查询评估进度与结果。
+
+**关键字段**：`status`（pending / processing / completed / failed）、`progress`、`summary`、`details`、`retrieval_options`、`error_message`。
+
+### 7.3 GET /api/v2/knowledge-bases/{kb_id}/evaluations
+
+**功能**：分页查询评估历史。按 `created_at desc, id desc` 排序。
+
+---
+
+## 8. V2 Analytics
+
+### GET /api/v2/analytics
+
+**功能**：查询 RAG 查询质量聚合指标。
+
+**成功响应形态**：`ApiResponse<AnalyticsResponse>`。
 
 | 参数 | 类型 | 默认 | 说明 |
 |---|---|---|---|
-| `start_date` | string (date) | 7 天前 | 统计开始日期（格式 `YYYY-MM-DD`） |
-| `end_date` | string (date) | 今天 | 统计结束日期（格式 `YYYY-MM-DD`） |
-| `kb_id` | string (UUID) | null | 按知识库过滤 |
+| `start_date` | date | 最近 7 天 | `YYYY-MM-DD` |
+| `end_date` | date | 今天 | `YYYY-MM-DD` |
+| `kb_id` | UUID | 无 | 按知识库过滤 |
 
-**响应体** `data` 字段：
+**data 字段**：
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | `total_queries` | int | 查询总数 |
-| `avg_latency_ms` | float | 平均延迟（毫秒） |
-| `avg_confidence` | float | 平均置信度 [0, 1] |
-| `low_confidence_rate` | float | 低置信度查询占比（confidence < 0.5） |
-| `tool_usage` | ToolUsageStats | 工具使用率统计 |
-| `token_consumption` | TokenConsumptionStats | Token 消耗统计 |
-| `avg_react_steps` | float | 平均 ReAct 步骤数 |
+| `avg_latency_ms` | float/null | 平均延迟 |
+| `avg_confidence` | float/null | 平均置信度 |
+| `low_confidence_rate` | float | 低置信度占比 |
+| `tool_usage.graph_rag_triggered` | float | Graph RAG 触发率 |
+| `tool_usage.bm25_contributed` | float | BM25 参与率 |
+| `tool_usage.faithfulness_check_triggered` | float | 答案自检触发率 |
+| `token_consumption.total_tokens` | int | Token 总量 |
+| `avg_react_steps` | float/null | 平均步骤数 |
 | `error_rate` | float | 错误率 |
-| `start_date` | string (date) | 统计起始日期 |
-| `end_date` | string (date) | 统计结束日期 |
-
-**ToolUsageStats 结构**：
-
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `graph_rag_triggered` | float | Graph RAG 被触发的查询占比 [0, 1] |
-| `bm25_contributed` | float | BM25 贡献的查询占比 [0, 1] |
-| `faithfulness_check_triggered` | float | 答案自检被触发的查询占比 [0, 1] |
-
-**TokenConsumptionStats 结构**：
-
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `total_tokens` | int | 总 token 消耗 |
-
-**示例**：
-
-```bash
-curl "http://127.0.0.1:8000/api/v2/analytics?start_date=2026-06-10&end_date=2026-06-17"
-```
-
-```json
-// 响应
-{
-  "code": 0,
-  "message": "success",
-  "data": {
-    "total_queries": 128,
-    "avg_latency_ms": 1520.3,
-    "avg_confidence": 0.865,
-    "low_confidence_rate": 0.0234,
-    "tool_usage": {
-      "graph_rag_triggered": 0.35,
-      "bm25_contributed": 0.82,
-      "faithfulness_check_triggered": 0.12
-    },
-    "token_consumption": {
-      "total_tokens": 185000
-    },
-    "avg_react_steps": 2.15,
-    "error_rate": 0.0078,
-    "start_date": "2026-06-10",
-    "end_date": "2026-06-17"
-  }
-}
-```
 
 ---
 
-## 4. V2 RAGAS 评估
+## 9. 推荐前端对接策略
 
-### 4.1 POST /api/v2/knowledge-bases/{kb_id}/evaluate
-
-**功能**：创建 RAGAS 评估任务（EVA-01）。异步执行——立即返回 `eval_task_id`，实际评估由 Celery worker 执行。评估集 QA 对在提交时做参数快照写入 `EvalTask.eval_config`。
-
-**路径参数**：
-
-| 参数 | 类型 | 必填 | 说明 |
-|---|---|---|---|
-| `kb_id` | string (UUID) | 是 | 知识库 ID |
-
-**请求体**：
-
-| 字段 | 类型 | 必填 | 默认 | 说明 |
-|---|---|---|---|---|
-| `eval_set` | array[EvalQAItem] | 是 | - | 评估集（QA 对列表，至少 1 条，最多 `EVAL_MAX_QUESTIONS` 条，默认上限 100） |
-| `retrieval_options` | EvalRetrievalOptions | 否 | `{}` | 评估时的检索参数（不传走 settings 默认） |
-| `name` | string | 否 | 自动生成 | 评估任务名称（≤256 字符，便于识别） |
-
-**EvalQAItem 结构**（`eval_set` 数组元素）：
-
-| 字段 | 类型 | 必填 | 说明 |
-|---|---|---|---|
-| `question` | string | 是 | 评估问题，1~2000 字符 |
-| `ground_truth` | string | 是 | 标准答案，1~4000 字符 |
-
-**EvalRetrievalOptions 结构**（`retrieval_options` 对象内）：
-
-| 字段 | 类型 | 默认 | 说明 |
-|---|---|---|---|
-| `top_k` | int | null（跟随 settings） | 返回结果数量，1~50 |
-| `enable_graph_rag` | bool | null（跟随 settings） | 是否启用 Graph RAG 锚定 |
-| `reranker_enable` | bool | null（跟随 settings） | 是否启用 Reranker |
-| `bm25_enable` | bool | null（跟随 settings） | 是否启用 BM25 |
-| `query_rewrite` | string | null（跟随 settings） | Query 改写策略（none / hyde / multi_query） |
-| `similarity_threshold` | float | null（跟随 settings） | Reranker 过滤阈值，0.0~1.0 |
-
-**响应体** `data` 字段：
-
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `eval_task_id` | string (UUID) | 评估任务 ID（用于 EVA-02/03 查询） |
-| `status` | string | 任务初始状态（`pending`） |
-
-**错误码**：
-
-- `40400` kb_id 不存在
-- `40012` `eval_set` 为空数组
-- `40013` `eval_set` 题数超出 `EVAL_MAX_QUESTIONS` 上限（默认 100）
-- `50300` Celery Worker 不可达或 Redis 连接失败（评估任务调度失败）
-- `50000` 服务器内部错误
-
-**示例**：
-
-```bash
-curl -X POST http://127.0.0.1:8000/api/v2/knowledge-bases/kb-uuid-aaaa-bbbb-cccc-ddddeeee0001/evaluate \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "eval_set": [
-      {
-        "question": "2024 年台风生成数量是多少？",
-        "ground_truth": "2024 年西北太平洋和南海共有 25 个台风生成。"
-      },
-      {
-        "question": "高温预警信号分几个等级？",
-        "ground_truth": "高温预警信号分为三级：黄色、橙色、红色。"
-      }
-    ],
-    "retrieval_options": {
-      "top_k": 10,
-      "reranker_enable": true
-    },
-    "name": "台风知识库 V2 评估"
-  }'
-```
-
-```json
-// 响应
-{
-  "code": 0,
-  "message": "success",
-  "data": {
-    "eval_task_id": "eval-uuuu-vvvv-wwww-xxxxyyyyzzzz",
-    "status": "pending"
-  }
-}
-```
-
-### 4.2 GET /api/v2/knowledge-bases/{kb_id}/evaluations/{eval_task_id}
-
-**功能**：查询评估进度 + 完成后的指标结果（EVA-02）。包括 RAGAS 4 项核心指标汇总（faithfulness / answer_relevancy / context_precision / context_recall）和每道题的详细评估结果。
-
-**路径参数**：
-
-| 参数 | 类型 | 必填 | 说明 |
-|---|---|---|---|
-| `kb_id` | string (UUID) | 是 | 知识库 ID |
-| `eval_task_id` | string (UUID) | 是 | 评估任务 ID |
-
-**响应体** `data` 字段：
-
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `eval_task_id` | string (UUID) | 评估任务 ID |
-| `kb_id` | string (UUID) | 知识库 ID |
-| `name` | string | 评估任务名称 |
-| `status` | string | 任务状态：`pending` / `processing` / `completed` / `failed` |
-| `progress` | int | 进度百分比（0~100） |
-| `question_count` | int | 评估题数 |
-| `summary` | EvalSummary | RAGAS 4 项核心指标汇总（completed 后非 null） |
-| `details` | array[EvalDetailItem] | 每道题的详细评估结果（completed 后非 null） |
-| `retrieval_options` | object | 评估时使用的检索参数快照（EvalTask.eval_config 中的 retrieval_options） |
-| `error_message` | string | 失败原因（status=failed 时有值） |
-| `created_at` | string (ISO 8601) | 创建时间 |
-| `completed_at` | string (ISO 8601) | 完成时间 |
-
-**EvalSummary 结构**（所有指标范围 [0, 1]；未完成或失败时可为 null）：
-
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `faithfulness` | float | 忠实度 |
-| `answer_relevancy` | float | 答案相关性 |
-| `context_precision` | float | 上下文精确度 |
-| `context_recall` | float | 上下文召回率 |
-| `overall_score` | float | 四项算术均值 |
-
-**EvalDetailItem 结构**：
-
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `question` | string | 评估问题 |
-| `ground_truth` | string | 标准答案 |
-| `answer` | string | 系统生成的答案 |
-| `contexts` | array[string] | 检索到的 chunk 文本列表 |
-| `faithfulness` | float | 本题忠实度 |
-| `answer_relevancy` | float | 本题答案相关性 |
-| `context_precision` | float | 本题上下文精确度 |
-| `context_recall` | float | 本题上下文召回率 |
-| `error` | string | 单题失败时的简要错误信息 |
-
-**错误码**：
-
-- `40400` kb_id 不存在 / eval_task_id 在该 KB 下不存在
-
-**示例**：
-
-```bash
-curl http://127.0.0.1:8000/api/v2/knowledge-bases/kb-uuid-aaaa-bbbb-cccc-ddddeeee0001/evaluations/eval-uuuu-vvvv-wwww-xxxxyyyyzzzz
-```
-
-```json
-// 响应（completed 状态）
-{
-  "code": 0,
-  "message": "success",
-  "data": {
-    "eval_task_id": "eval-uuuu-vvvv-wwww-xxxxyyyyzzzz",
-    "kb_id": "kb-uuid-aaaa-bbbb-cccc-ddddeeee0001",
-    "name": "台风知识库 V2 评估",
-    "status": "completed",
-    "progress": 100,
-    "question_count": 2,
-    "summary": {
-      "faithfulness": 0.92,
-      "answer_relevancy": 0.88,
-      "context_precision": 0.85,
-      "context_recall": 0.90,
-      "overall_score": 0.8875
-    },
-    "details": [
-      {
-        "question": "2024 年台风生成数量是多少？",
-        "ground_truth": "2024 年西北太平洋和南海共有 25 个台风生成。",
-        "answer": "2024 年西北太平洋和南海共有 25 个台风生成。",
-        "contexts": ["2024 年西北太平洋和南海共有 25 个台风生成..."],
-        "faithfulness": 0.95,
-        "answer_relevancy": 0.92,
-        "context_precision": 0.88,
-        "context_recall": 0.91,
-        "error": null
-      }
-    ],
-    "retrieval_options": {
-      "top_k": 10,
-      "reranker_enable": true
-    },
-    "error_message": null,
-    "created_at": "2026-06-17T10:00:00+00:00",
-    "completed_at": "2026-06-17T10:05:30+00:00"
-  }
-}
-```
-
-### 4.3 GET /api/v2/knowledge-bases/{kb_id}/evaluations
-
-**功能**：评估历史列表（EVA-03），按 `created_at` 倒序分页返回，不含每题详情。
-
-**路径参数**：
-
-| 参数 | 类型 | 必填 | 说明 |
-|---|---|---|---|
-| `kb_id` | string (UUID) | 是 | 知识库 ID |
-
-**Query 参数**：
-
-| 参数 | 类型 | 默认 | 范围 | 说明 |
-|---|---|---|---|---|
-| `page` | int | 1 | ≥1 | 页码 |
-| `page_size` | int | 20 | 1~100 | 每页条数 |
-
-**响应体** `data` 字段：
-
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `items` | array[EvalListItem] | 评估历史列表（按 created_at 倒序 + id 倒序双键排序） |
-| `total` | int | 总数 |
-| `page` | int | 当前页码 |
-| `page_size` | int | 每页条数 |
-
-**EvalListItem 结构**：
-
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `eval_task_id` | string (UUID) | 评估任务 ID |
-| `name` | string | 评估任务名称 |
-| `status` | string | 任务状态 |
-| `progress` | int | 进度（0~100） |
-| `question_count` | int | 评估题数 |
-| `summary` | EvalSummary | RAGAS 指标汇总（completed 后有值） |
-| `retrieval_options` | object | 检索参数快照 |
-| `created_at` | string (ISO 8601) | 创建时间 |
-| `completed_at` | string (ISO 8601) | 完成时间 |
-
-**示例**：
-
-```bash
-curl "http://127.0.0.1:8000/api/v2/knowledge-bases/kb-uuid-aaaa-bbbb-cccc-ddddeeee0001/evaluations?page=1&page_size=10"
-```
-
-```json
-// 响应
-{
-  "code": 0,
-  "message": "success",
-  "data": {
-    "items": [
-      {
-        "eval_task_id": "eval-uuuu-vvvv-wwww-xxxxyyyyzzzz",
-        "name": "台风知识库 V2 评估",
-        "status": "completed",
-        "progress": 100,
-        "question_count": 2,
-        "summary": {
-          "faithfulness": 0.92,
-          "answer_relevancy": 0.88,
-          "context_precision": 0.85,
-          "context_recall": 0.90,
-          "overall_score": 0.8875
-        },
-        "retrieval_options": {
-          "top_k": 10,
-          "reranker_enable": true
-        },
-        "created_at": "2026-06-17T10:00:00+00:00",
-        "completed_at": "2026-06-17T10:05:30+00:00"
-      }
-    ],
-    "total": 1,
-    "page": 1,
-    "page_size": 10
-  }
-}
-```
+1. **聊天主流程**：优先用 `/api/v1/chat/stream` 做流式体验；如果需要 Citation、confidence、trace，则用 `/api/v2/query` 做非流式可信问答。
+2. **知识库与文件管理**：只用 `/api/v1/knowledge-bases/**`，这是当前生产主入口。
+3. **V2 能力页**：Trace、评估、Analytics 独立做开发者/运营页面，不影响主聊天链路。
+4. **不要对接预留 stream 字段**：V2 的 `stream` 字段当前只是 schema 预留。
+5. **统一错误处理**：无论成功是否包裹，失败基本都会返回 `{code,message,data:null}`；前端按 `code !== 0` 展示错误即可。
 
 ---
 
-## 5. V1 接口扩展
-
-### 5.1 PATCH /api/v1/knowledge-bases/{kb_id}
-
-**功能**：V1.5 知识库修改接口（KB-04）在 V2.0 新增 `retrieval_config` 字段（HRE-06）。允许在知识库级别设置混合检索默认配置，作为三层配置合并的中间层。
-
-**请求体**（新增字段以 `**` 标记）：
-
-| 字段 | 类型 | 必填 | 默认 | 说明 |
-|---|---|---|---|---|
-| `name` | string | 否 | null | 新的知识库名称（1~128 字符，全局唯一） |
-| `description` | string | 否 | null | 新的知识库描述（≤500 字符，null 表示清空） |
-| `retrieval_config` | object | 否 | ** | **V2.0 知识库级检索默认配置；null=不变更，`{}`=清空所有覆盖字段，dict=部分覆盖（service 层 merge）** |
-
-`name` / `description` / `retrieval_config` 至少传一个，否则 422。
-
-**`retrieval_config` 支持的字段**：
-
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `top_k` | int | 默认返回结果数量 |
-| `reranker_enable` | bool | 是否启用 Reranker |
-| `bm25_enable` | bool | 是否启用 BM25 |
-| `query_rewrite` | string | Query 改写策略（none / hyde / multi_query） |
-| `enable_graph_rag` | bool | 是否启用 Graph RAG 锚定 |
-| `enable_faithfulness_check` | bool | 是否启用答案自检 |
-| `similarity_threshold` | float | Reranker 过滤阈值 |
-| `rerank_top_n` | int | Reranker 输入候选数 |
-
-> 合并优先级：**API options > KB.retrieval_config > 全局 settings**。KB 层的字段为 None / 缺失时回落 settings，被 API 层传值覆盖时忽略。
-
-**响应体** `data` 字段（V1.5 KB 详情 + 新增 `retrieval_config` 字段）：
-
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `id` | string (UUID) | KB ID |
-| `name` | string | 名称 |
-| `description` | string | 描述 |
-| `embedding_dim` | int | 向量维度 |
-| `chunk_size` | int | 切片大小 |
-| `chunk_overlap` | int | 切片重叠 |
-| `status` | string | 状态（active / building / error） |
-| `file_count` | int | 关联文件数 |
-| `chunk_count` | int | 向量切片数 |
-| `entity_count` | int | Neo4j 实体数 |
-| `retrieval_config` | object | **V2.0 知识库级检索默认配置** |
-| `created_at` | string (ISO 8601) | 创建时间 |
-
-**错误码**（同 V1.5 KB-04）：
-
-- `40001` 三个字段都不传 / name 空白 / 超长 / 传入只读字段（embedding_dim 等）
-- `40400` kb_id 不存在
-- `40900` 新 name 与其它 KB 冲突
-
-**示例**：
-
-```bash
-curl -X PATCH http://127.0.0.1:8000/api/v1/knowledge-bases/kb-uuid-aaaa-bbbb-cccc-ddddeeee0001 \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "retrieval_config": {
-      "top_k": 10,
-      "reranker_enable": true,
-      "bm25_enable": true,
-      "query_rewrite": "none",
-      "similarity_threshold": 0.3
-    }
-  }'
-```
-
-```json
-// 响应
-{
-  "code": 0,
-  "message": "success",
-  "data": {
-    "id": "kb-uuid-aaaa-bbbb-cccc-ddddeeee0001",
-    "name": "气象库",
-    "description": "台风知识库",
-    "embedding_dim": 4096,
-    "chunk_size": 512,
-    "chunk_overlap": 64,
-    "status": "active",
-    "file_count": 5,
-    "chunk_count": 1200,
-    "entity_count": 0,
-    "retrieval_config": {
-      "top_k": 10,
-      "reranker_enable": true,
-      "bm25_enable": true,
-      "query_rewrite": "none",
-      "similarity_threshold": 0.3
-    },
-    "created_at": "2026-06-11T12:00:00+00:00"
-  }
-}
-```
-
----
-
-## 附录
-
-### A.1 三层配置合并（HRE-06）
-
-V2.0 的检索行为通过三层配置结构控制，优先级从高到低：
-
-```
-API options（QueryOptions） > KB.retrieval_config（JSONB） > 全局 settings
-```
-
-**合并规则**：
-
-1. **API options**（`/v2/query` 请求体中的 `options` 字段）：最高优先级。任一字段为 `None` 表示"未指定，跟随下层"。
-2. **KB.retrieval_config**（通过 §5.1 PATCH 接口设置）：中间层。字段缺失或为 `None` 时回落 settings。传 `{}` 可清空所有覆盖。
-3. **全局 settings**（`app.core.config.Settings`）：最底层兜底。
-
-**最终生效的 ResolvedRetrievalOptions**（下游模块只读此结构）：
-
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `top_k` | int | 返回结果数量（默认 5） |
-| `similarity_threshold` | float | Reranker 过滤阈值（默认 0.3） |
-| `bm25_enable` | bool | BM25 开关 |
-| `reranker_enable` | bool | Reranker 开关 |
-| `query_rewrite` | string | Query 改写策略（none / hyde / multi_query） |
-| `enable_graph_rag` | bool | Graph RAG 锚定开关 |
-| `enable_faithfulness_check` | bool | 答案自检开关（CHC-04） |
-| `rrf_k` | int | RRF 融合常数（来自 settings） |
-| `rerank_top_n` | int | Reranker 输入候选数（默认 30） |
-
-### A.2 trace_id 与 session_id 的关系
-
-- **session_id**：会话生命周期标识，一次对话（多轮消息）共享同一 session_id。
-- **trace_id**：单次请求追踪标识。每次 `/v2/query` 调用产生一个唯一 trace_id，记录该请求的完整步骤链路（query_rewrite → NER → anchor → retrieve → generate → citation → faithfulness）。
-- 关系：**1 个 session_id 对应 N 个 trace_id**（会话的每轮查询各有一条 trace）。
-- 通过 `GET /api/v2/traces/sessions/{session_id}/traces` 获取某会话的所有 trace。
-
-### A.3 SSE 流式输出（V2 暂未实现）
-
-V2.0 当前 `/v2/query` 仅支持非流式（同步返回完整 JSON）。SSE 流式输出在 PRD §3.4 中有描述但 T6/T8 阶段尚未实现。
-
-前端流式对话体验暂时复用 V1.5 的 [`POST /api/v1/chat/stream`](v1_5_api_reference.md#21-流式对话-post-apiv1chatstream) 接口。
-
-### A.4 在线交互文档
-
-服务启动后访问：
-- [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs) — Swagger UI（可在浏览器直接试调用）
-- [http://127.0.0.1:8000/redoc](http://127.0.0.1:8000/redoc) — ReDoc 静态文档
-- [http://127.0.0.1:8000/openapi.json](http://127.0.0.1:8000/openapi.json) — OpenAPI 3.x 规范
-
----
-
-*TyAgent V2.0 API · End of Document*
+*TyAgent API Reference · End of Document*

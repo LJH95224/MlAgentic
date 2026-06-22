@@ -134,6 +134,25 @@ class TestTableDescription:
         assert len(r) == 2
         assert {d.parent_index for d in r} == {0, 2}
 
+    def test_resolve_idp_kwargs_uses_unified_provider_prefix_resolution(self):
+        """IDP LLM kwargs 应复用统一前缀推断，Qwen/Qwen3 需补 openai/。"""
+        from app.ingest.table_description import _resolve_idp_kwargs
+
+        with patch("app.ingest.table_description.get_settings") as mock_get:
+            mock_get.return_value = SimpleNamespace(
+                idp_llm_model="Qwen/Qwen3-8B",
+                litellm_model=None,
+                litellm_api_base="https://api.siliconflow.cn/v1",
+                litellm_api_key="sk-test",
+                litellm_timeout=60.0,
+                litellm_num_retries=0,
+            )
+            kwargs = _resolve_idp_kwargs(
+                messages=[{"role": "user", "content": "表格"}]
+            )
+        assert kwargs["model"] == "openai/Qwen/Qwen3-8B"
+        assert kwargs["api_base"] == "https://api.siliconflow.cn/v1"
+
     @pytest.mark.asyncio
     async def test_timeout_soft_skip(self):
         import asyncio

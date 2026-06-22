@@ -62,9 +62,15 @@ def build_analytics_snapshot(
             if output.get("tag_count", 0) > 0:
                 graph_rag_triggered = True
 
-        # BM25 参与：有 retrieve 步骤即认为 BM25 可能贡献（默认 bm25_enable=True）
+        # BM25 真实贡献判定（B-M-11）：retrieve 步骤同时满足
+        #   1) bm25_enabled=True（API/KB/settings 三层合并后开启）
+        #   2) hit_count > 0（hybrid_search 实际有命中，BM25 才有数据可融合）
+        # 任一不满足都不算贡献——避免"有 retrieve 步骤就算贡献"那种贴脸式统计。
+        # 注：Milvus hybrid_search 不回传分项 BM25 子分数，所以无法用 r.bm25_score 判定。
         if s.step_type == "retrieve":
-            bm25_contributed = True
+            output = s.step_output or {}
+            if output.get("bm25_enabled") is True and output.get("hit_count", 0) > 0:
+                bm25_contributed = True
 
         # 答案自检触发
         if s.step_type == "faithfulness_check":

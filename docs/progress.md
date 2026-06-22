@@ -508,6 +508,41 @@
 - ✅ 本地服务轻量复测：`GET /health`、`OPTIONS /api/v2/query` CORS、`POST /api/v2/query` 非法 query_rewrite、`GET /api/v2/traces/not-exist-trace-id`、`GET /api/v1/knowledge-bases` 均通过；追加复测确认 `GET /api/v2/analytics` 返回 `code=0/message=success/data` 包装，`POST /api/v2/generate` 空/缺省 `context_chunks` 均返回 HTTP 422 + 业务码 `42201`。
 - ✅ 用户手动回归：`pytest tests/test_async_utils.py tests/test_ingest_task.py tests/test_rag_retriever.py tests/test_v2_p1.py tests/test_v2_t3.py tests/test_v2_t0.py tests/test_v2_t10.py tests/test_v2_t12.py` → **191 passed, 1 skipped, 4 warnings in 11.94s**。其中 3 条 `AsyncMockMixin._execute_mock_call was never awaited` 来自 `tests/test_v2_p1.py` mock_db 形态，已调整为 `MagicMock.add + AsyncMock.commit/rollback` 以消除测试警告；1 条 asyncpg `_cancel` unawaited 属跳过真 PG 集成测试环境清理警告，功能用例均通过。
 
+### Hardening · 审查报告 B 第二批高价值项 🔧（2026-06-18）
+
+#### 交付内容
+
+| 审查项 | 实现位置 | 修复内容 |
+|---|---|---|
+| B H-02 / A-01 | [app/rag/retriever.py](../app/rag/retriever.py) | Agent Tool `search_knowledge_base` 改为复用 V2 `hybrid_search` + `format_hybrid_results`，使 ReAct 主动检索获得 BM25、RRF、Reranker 与结构化元数据能力；`doc_type` / `document_id` / `entity_tags` 原样透传，`kb_ids=[]` 仍保持“不查任何 KB”的 V1.5 语义 |
+| B H-03 | [app/api/v2/endpoints/query.py](../app/api/v2/endpoints/query.py) | `_multi_query_search` 二次 RRF 分数按有效检索路径数归一化，避免子查询数量越多 `score` 越高，进而污染 citation `rerank_score` 与 confidence；空结果路径不计入分母，失败路径继续软降级 |
+| B H-05 | [app/api/v2/endpoints/retrieve.py](../app/api/v2/endpoints/retrieve.py) | `/api/v2/retrieve` 接入 `Tracer`，记录 `query_ner`、`graph_anchor`、`retrieve` 步骤，成功与软失败响应均返回 `trace_id`，便于通过 `/api/v2/traces/{trace_id}` 排查分层检索接口 |
+| B H-04 | [app/rag/hybrid_retriever.py](../app/rag/hybrid_retriever.py)、[app/api/v2/endpoints/retrieve.py](../app/api/v2/endpoints/retrieve.py) | `HybridSearchResult` 新增 `vector_score` / `bm25_score` / `rrf_score` / `rerank_score`；`/api/v2/retrieve` 响应逐字段透出。Milvus RRFRanker 当前不暴露 BM25 单路原始分，`bm25_score` 暂为 `None`，融合分用 `rrf_score` 表示 |
+| B M-09 / M-10 | [app/llm/client.py](../app/llm/client.py)、[app/rag/query_rewriter.py](../app/rag/query_rewriter.py)、[app/kg/ner.py](../app/kg/ner.py)、[app/ingest/table_description.py](../app/ingest/table_description.py)、[app/rag/faithfulness.py](../app/rag/faithfulness.py)、[app/tasks/session_task.py](../app/tasks/session_task.py)、[app/tasks/eval_task.py](../app/tasks/eval_task.py)、[app/api/v2/endpoints/query.py](../app/api/v2/endpoints/query.py)、[app/api/v2/endpoints/generate.py](../app/api/v2/endpoints/generate.py) | 新增 `build_completion_kwargs()` 统一 chat completion 类调用参数；`_resolve_model_name()` 改为 LiteLLM provider 白名单判断，修复 `Qwen/Qwen3-*` 模型命名空间被误判为 provider 前缀的问题；Query rewrite、KG NER、IDP、Faithfulness、Session/Eval、V2 query/generate 均已接入 |
+| 测试覆盖 | [tests/test_llm_client.py](../tests/test_llm_client.py)、[tests/test_kg_ner.py](../tests/test_kg_ner.py)、[tests/test_session_task.py](../tests/test_session_task.py)、[tests/test_v2_t2.py](../tests/test_v2_t2.py)、[tests/test_v2_t7.py](../tests/test_v2_t7.py)、[tests/test_v2_t8.py](../tests/test_v2_t8.py)、[tests/test_v2_t9.py](../tests/test_v2_t9.py)、[tests/test_v2_t10.py](../tests/test_v2_t10.py)、[tests/test_v2_t11.py](../tests/test_v2_t11.py) | 调整 Agent 检索 mock 为 V2 hybrid_search；新增 multi_query 归一化断言；新增 retrieve trace_id 成功、空结果、错误兜底覆盖；新增 retrieve 分项分数透出覆盖；新增统一 LLM kwargs/prefix RED→GREEN 覆盖 |
+
+#### 关键设计决策
+
+1. **Agent Tool 不复制 V2 检索逻辑**：`retriever.py` 保留 Tool 签名、权限过滤辅助和格式化兼容函数，但实际检索委托给 `hybrid_search`，避免 BM25/RRF/Reranker 两套路由长期漂移。
+2. **RRF 归一化只按有效路径计数**：抛异常路径与空结果路径不计入分母，既不放大失败，也不稀释有效召回；同一 chunk 在所有有效路径 rank=1 时归一化为 1.0。
+3. **`/v2/retrieve` Trace 不写 analytics**：本项只补 OBS-01/02 Trace 可追踪能力；OBS-03 聚合统计仍以 `/v2/query` 为主，避免把纯检索调试请求混入问答质量统计。
+4. **分项分数先保真透出可获得部分**：Milvus `hybrid_search + RRFRanker` 返回融合后的 `distance`，当前无法直接取得 dense/BM25 单路原始分；因此 hybrid 路径填 `rrf_score`，dense/fallback 路径填 `vector_score`，Reranker 后填 `rerank_score`，`bm25_score` 暂为 `None`。
+5. **统一 LLM helper 只覆盖 chat completion 类调用**：embedding、reranker、RAGAS 评估分别有 aembedding、SiliconFlow rerank 专用 HTTP、LangChain wrapper 特殊约束，本批不纳入统一入口，避免过度抽象破坏已验收链路。
+6. **`/` 不再等价于已带 provider 前缀**：`Qwen/Qwen3-*` 这类模型命名空间包含 slash，但不是 LiteLLM provider；统一用 provider 白名单判断，未知 namespace 继续按 `api_base` 推断补 `openai/`、`deepseek/` 等前缀。
+
+#### 验证状态
+
+- ✅ 语法级验证：`python -m compileall app/rag/retriever.py app/rag/hybrid_retriever.py app/api/v2/endpoints/query.py app/api/v2/endpoints/retrieve.py tests/test_rag_retriever.py tests/test_v2_t8.py tests/test_v2_t10.py` 通过。
+- ✅ 用户手动回归：`pytest tests/test_rag_retriever.py tests/test_v2_t8.py::TestMultiQueryRRF tests/test_v2_t10.py::TestRetrieveEndpoint tests/test_v2_t10.py::TestT10E2E::test_retrieve_e2e -q` → 100% 通过。
+- ✅ H-04 TDD 验证：RED 阶段 `pytest tests/test_v2_t2.py::TestHybridSearchResult tests/test_v2_t2.py::TestHybridSearch::test_hybrid_search_bm25_enabled tests/test_v2_t2.py::TestHybridSearch::test_hybrid_search_bm25_disabled_falls_back_to_dense tests/test_v2_t2.py::TestHybridSearch::test_hybrid_search_fallback_on_failure tests/test_v2_t10.py::TestRetrieveEndpoint::test_retrieve_returns_chunks -q` 先按预期失败（缺 `vector_score` 等字段）；GREEN 阶段同命令 → **6 passed, 100%**。
+- ✅ H-04 语法级验证：`python -m compileall app/rag/hybrid_retriever.py app/api/v2/endpoints/retrieve.py tests/test_v2_t2.py tests/test_v2_t10.py` 通过。
+- ✅ M-09/M-10 TDD 验证：`tests/test_llm_client.py::TestModelNameResolution tests/test_llm_client.py::TestCompletionKwargsBuilder` RED 阶段先按预期失败（namespace slash 误判 + `build_completion_kwargs` 缺失），GREEN 阶段 → **7 passed, 100%**。
+- ✅ M-09/M-10 调用点验证：Query rewrite、KG NER、IDP、Faithfulness、Session、Eval 6 个调用点 RED 阶段先按预期失败（`Qwen/Qwen3-8B` 未补 `openai/`），GREEN 阶段同命令 → **6 passed, 100%**。
+- ✅ M-09/M-10 V2 生成验证：`/v2/generate` 与 `/v2/query` 两个生成函数 RED 阶段先按预期失败（原样传 `Qwen/Qwen3-8B`），GREEN 阶段同命令 → **2 passed, 100%**。
+- ✅ M-09/M-10 语法级验证：`python -m compileall app/llm/client.py app/rag/query_rewriter.py app/kg/ner.py app/ingest/table_description.py app/ingest/dual_layer.py app/ingest/doc_metadata.py app/rag/faithfulness.py app/tasks/session_task.py app/tasks/eval_task.py app/api/v2/endpoints/query.py app/api/v2/endpoints/generate.py tests/test_llm_client.py tests/test_kg_ner.py tests/test_session_task.py tests/test_v2_t7.py tests/test_v2_t8.py tests/test_v2_t9.py tests/test_v2_t10.py tests/test_v2_t11.py` 通过。
+- ✅ 扩大回归：`pytest tests/test_llm_client.py tests/test_kg_ner.py tests/test_session_task.py tests/test_v2_t7.py tests/test_v2_t8.py tests/test_v2_t9.py tests/test_v2_t10.py tests/test_v2_t11.py -q` → **243 passed**；过程中暴露并修复 [tests/test_v2_t10.py](../tests/test_v2_t10.py) `TestT10E2E::test_retrieve_e2e` mock 未携带新分项分数的遗留问题，已补 `vector_score=0.85 / rrf_score=0.80 / rerank_score=0.92` 并断言；遗留的 `analytics_writer.py db.add(row) was never awaited` warning 与 ragas 弃用 warning 均来自既有 mock 形态与第三方库，不影响功能。
+- ✅ 用户手动扩大回归：`pytest tests/test_rag_retriever.py tests/test_v2_t8.py tests/test_v2_t10.py -q` → 100% 通过；仍有 5 条既有 `AsyncMockMixin._execute_mock_call was never awaited` warning，来自 `tests/test_v2_t8.py::TestV2QueryE2E` 中 mock db 形态触发 [app/observability/analytics_writer.py](../app/observability/analytics_writer.py) `db.add(row)`，不影响本批功能用例通过。
+
 ### T11 · RAGAS 评估 ✅（2026-06-16）
 
 #### 交付内容
@@ -1003,6 +1038,18 @@ python scripts/kg_smoke.py
 
 ## 历史变更
 
+- **2026-06-18**：接口对接文档从“V2 专用”调整为“全项目接口对接”
+  - [docs/v2_api_reference.md](v2_api_reference.md) 重写为 TyAgent 全项目接口文档：按当前实际注册路由整理 `/health`、`/api/v1` 会话/聊天/知识库/文件、`/api/v2` query/retrieve/generate/rerank/trace/evaluate/analytics 全量接口，并明确“使用中 / 废弃或不推荐”清单
+  - [docs/v2_frontend_guide.md](v2_frontend_guide.md) 重写为全项目前端接口对接指南：给出聊天流式、KB/文件管理、V2 可信问答、Trace、评估、Analytics、高级检索配置的页面级对接策略
+  - 关键契约：当前成功响应存在两种形态（V1 与 `/api/v2/analytics` 为 `{code,message,data}`，多数 V2 端点直接返回业务对象）；文档已要求前端通过 `unwrap()` 兼容解析，失败响应仍统一按 `{code,message,data:null}` 处理
+  - 接口状态结论：`/api/v1/chat/stream` 仍是流式聊天主入口；`/api/v2/query` 是非流式可信 RAG 主入口；V2 `stream` 字段仅预留；`app/tasks/ingest_task_v1.py` 为历史归档不再对接
+  - 补充“接口取舍与替换关系”：明确 V1 KB/文件/会话接口继续使用，KB 更新接口用同一路径新增 `retrieval_config`，聊天必须显式传 `kb_ids`，旧设计路径 `/api/v2/sessions/{session_id}/traces` 不对接、改用实际注册的 `/api/v2/traces/sessions/{session_id}/traces`
+- **2026-06-18**：根据 2026-06-17 审查报告 B 完成第二批高价值项修复
+  - Agent 检索对齐 V2：[app/rag/retriever.py](../app/rag/retriever.py) 的 `search_knowledge_base` 改为委托 [app/rag/hybrid_retriever.py](../app/rag/hybrid_retriever.py) `hybrid_search`，让 ReAct Agent 主动检索与 `/api/v2/query` 同享 BM25/RRF/Reranker 能力
+  - multi_query 分数归一化：[app/api/v2/endpoints/query.py](../app/api/v2/endpoints/query.py) `_multi_query_search` 将 RRF 累积分数按有效路径数归一化，防止 confidence 随子查询数量虚高
+  - `/v2/retrieve` Trace：[app/api/v2/endpoints/retrieve.py](../app/api/v2/endpoints/retrieve.py) 接入 `Tracer` 并在成功/软失败响应返回 `trace_id`；[tests/test_rag_retriever.py](../tests/test_rag_retriever.py)、[tests/test_v2_t8.py](../tests/test_v2_t8.py)、[tests/test_v2_t10.py](../tests/test_v2_t10.py) 同步覆盖
+  - `/v2/retrieve` 分项分数：[app/rag/hybrid_retriever.py](../app/rag/hybrid_retriever.py) `HybridSearchResult` 新增 `vector_score` / `bm25_score` / `rrf_score` / `rerank_score`；[app/api/v2/endpoints/retrieve.py](../app/api/v2/endpoints/retrieve.py) 响应逐字段透出；[tests/test_v2_t2.py](../tests/test_v2_t2.py)、[tests/test_v2_t10.py](../tests/test_v2_t10.py) TDD 覆盖 RED→GREEN
+  - LLM 调用入口统一：[app/llm/client.py](../app/llm/client.py) 新增 `build_completion_kwargs()` 并修复 provider 前缀判断；Query rewrite、KG NER、IDP、Faithfulness、Session/Eval、V2 query/generate 接入统一 kwargs 构建；`Qwen/Qwen3-*` + SiliconFlow 场景自动补 `openai/` 前缀
 - **2026-06-18**：根据 2026-06-17 A/B 审查报告完成第一批 hardening 修复
   - 新增 [docs/0617/xiugai.md](0617/xiugai.md) 作为 A/B 审查报告统一 TODO 清单，标注当前批次、下批排期与验收建议
   - 异步防挂死：[app/core/async_utils.py](../app/core/async_utils.py) 新增 `wait_for_named()` / `gather_with_timeout()`；[app/api/v2/endpoints/query.py](../app/api/v2/endpoints/query.py)、[app/rag/query_ner.py](../app/rag/query_ner.py)、[app/ingest/table_description.py](../app/ingest/table_description.py)、[app/ingest/dual_layer.py](../app/ingest/dual_layer.py)、[app/tasks/ingest_task.py](../app/tasks/ingest_task.py) 接入整组超时并保留软降级语义

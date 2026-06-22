@@ -8,17 +8,21 @@
 - task_serializer="json"：禁用 pickle，避免 RCE 风险
 - include：显式列出包含任务的模块，让 worker 启动时 import 完成注册
 - timezone="Asia/Shanghai" + enable_utc=False：方便日志对时
+- beat_schedule：周期任务编排（V2.0 P1-11 引入"卡死文件回收"）
 
 启动命令（Windows 开发态）：
     celery -A app.tasks.celery_app worker --pool=solo -l info
+    celery -A app.tasks.celery_app beat -l info       # 周期任务调度器（独立进程）
 
 Linux 生产部署：
     celery -A app.tasks.celery_app worker --pool=prefork -c 4 -l info
+    celery -A app.tasks.celery_app beat -l info
 """
 
 import logging
 
 from celery import Celery
+from celery.schedules import schedule
 
 from app.core.config import get_settings
 
@@ -37,6 +41,8 @@ _TASK_MODULES: list[str] = [
     "app.tasks.session_task",
     # T11 阶段（2026-06-16 起）：RAGAS 评估
     "app.tasks.eval_task",
+    # P1-11（2026-06-22 起）：卡死 processing 文件回收周期任务
+    "app.tasks.reaper_task",
 ]
 
 
@@ -71,11 +77,29 @@ celery_app.conf.update(
     # 用户体验上：Redis 没起时立刻报错 → 比"卡 30 分钟没反应"友好得多
     broker_connection_max_retries=3,
     broker_connection_timeout=4,  # 单次连接超时（秒）
+    # ── 周期任务（celery beat 调度器读这里）──
+    # 注意：必须额外启动 `celery -A app.tasks.celery_app beat` 进程才生效，
+    # worker 只执行被入队的任务，自身不调度。
+    beat_schedule={
+        # P1-11 卡死 processing 文件回收
+        # interval 由 INGEST_REAPER_INTERVAL_S 控制（默认 600s = 10min）
+        "reap-stale-processing-files": {
+            "task": "app.tasks.reaper_task.reap_stale_processing_files",
+            "schedule": schedule(run_every=_settings.ingest_reaper_interval_s),
+            "options": {
+                # 单实例：beat 重复触发时如果队列里还有上一轮任务，跳过本次
+                # 防止周期 < 任务执行时间时堆积（虽然回收任务正常 < 60s 完成）
+                "expires": _settings.ingest_reaper_interval_s,
+            },
+        },
+    },
 )
 
 
 logger.info(
-    "Celery 初始化完成 broker=%s backend=%s",
+    "Celery 初始化完成 broker=%s backend=%s reaper_interval=%ds reaper_enable=%s",
     _settings.effective_celery_broker_url,
     _settings.effective_celery_result_backend,
+    _settings.ingest_reaper_interval_s,
+    _settings.ingest_reaper_enable,
 )

@@ -94,6 +94,73 @@ class TestModelNameResolution:
         with pytest.raises(ValueError, match="LITELLM_MODEL"):
             _resolve_model_name(None, "https://api.deepseek.com")
 
+    def test_model_namespace_slash_is_not_provider_prefix(self, mock_env_vars):
+        """Qwen/Qwen3 这类模型命名含 slash，但仍需要按 api_base 补 LiteLLM provider。"""
+        mock_env_vars(
+            LITELLM_MODEL="Qwen/Qwen3-8B",
+            LITELLM_API_BASE="https://api.siliconflow.cn/v1",
+        )
+        from app.llm.client import _resolve_model_name
+
+        assert (
+            _resolve_model_name("Qwen/Qwen3-8B", "https://api.siliconflow.cn/v1")
+            == "openai/Qwen/Qwen3-8B"
+        )
+
+    def test_known_provider_prefix_is_kept(self, mock_env_vars):
+        """已带 LiteLLM provider 前缀时不重复补。"""
+        mock_env_vars(
+            LITELLM_MODEL="openai/Qwen/Qwen3-8B",
+            LITELLM_API_BASE="https://api.siliconflow.cn/v1",
+        )
+        from app.llm.client import _resolve_model_name
+
+        assert (
+            _resolve_model_name("openai/Qwen/Qwen3-8B", "https://api.siliconflow.cn/v1")
+            == "openai/Qwen/Qwen3-8B"
+        )
+
+
+class TestCompletionKwargsBuilder:
+    """统一 LLM kwargs 构建：供 Query/NER/IDP/Faithfulness/Session/Eval 复用。"""
+
+    def test_build_completion_kwargs_with_model_override(self, mock_env_vars):
+        mock_env_vars(
+            LITELLM_MODEL="deepseek-chat",
+            LITELLM_API_KEY="sk-fake",
+            LITELLM_API_BASE="https://api.deepseek.com/v1",
+        )
+        from app.llm.client import build_completion_kwargs
+
+        kwargs = build_completion_kwargs(
+            messages=[{"role": "user", "content": "你好"}],
+            model="deepseek-v4-flash",
+            temperature=0.1,
+            max_tokens=123,
+            response_format={"type": "json_object"},
+            num_retries=0,
+        )
+
+        assert kwargs["model"] == "deepseek/deepseek-v4-flash"
+        assert kwargs["api_key"] == "sk-fake"
+        assert kwargs["api_base"] == "https://api.deepseek.com/v1"
+        assert kwargs["temperature"] == 0.1
+        assert kwargs["max_tokens"] == 123
+        assert kwargs["response_format"] == {"type": "json_object"}
+        assert kwargs["num_retries"] == 0
+
+    def test_build_completion_kwargs_missing_model_mentions_label(self, mock_env_vars):
+        mock_env_vars(LITELLM_MODEL="", LITELLM_API_BASE="https://api.deepseek.com/v1")
+        from app.llm.client import build_completion_kwargs
+
+        with pytest.raises(ValueError, match="QUERY_REWRITER_MODEL"):
+            build_completion_kwargs(
+                messages=[{"role": "user", "content": "你好"}],
+                model=None,
+                fallback_model=None,
+                required_model_label="QUERY_REWRITER_MODEL 或 LITELLM_MODEL",
+            )
+
 
 # ────────────── acompletion ──────────────
 

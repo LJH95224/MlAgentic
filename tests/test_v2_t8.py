@@ -159,6 +159,27 @@ class TestRewriteQuery:
         assert r.rewritten_text is None
         assert r.sub_queries == []
 
+    def test_rewriter_kwargs_uses_unified_provider_prefix_resolution(self):
+        """Query 改写器应复用统一前缀推断，Qwen/Qwen3 需补 openai/。"""
+        from types import SimpleNamespace
+
+        from app.rag.query_rewriter import _resolve_rewriter_kwargs
+
+        with patch("app.rag.query_rewriter.get_settings") as mock_settings:
+            mock_settings.return_value = SimpleNamespace(
+                query_rewriter_model="Qwen/Qwen3-8B",
+                litellm_model=None,
+                litellm_api_base="https://api.siliconflow.cn/v1",
+                litellm_api_key="sk-test",
+                litellm_timeout=30.0,
+                litellm_num_retries=1,
+            )
+            kwargs = _resolve_rewriter_kwargs(
+                messages=[{"role": "user", "content": "台风"}]
+            )
+        assert kwargs["model"] == "openai/Qwen/Qwen3-8B"
+        assert kwargs["api_base"] == "https://api.siliconflow.cn/v1"
+
     @pytest.mark.asyncio
     async def test_hyde_happy_path(self):
         from app.rag.query_rewriter import rewrite_query
@@ -487,12 +508,12 @@ class TestMultiQueryRRF:
 
     @pytest.mark.asyncio
     async def test_same_chunk_in_multiple_paths_score_accumulates(self):
-        """同一 chunk 在多路命中，RRF 分数累加，排名靠前。"""
+        """同一 chunk 在多路命中，归一化 RRF 分数累加，排名靠前。"""
         from app.api.v2.endpoints.query import _multi_query_search
 
         # path 0 返回 [c=10, c=20]；path 1 返回 [c=10, c=30]
-        # c=10 在两路都是 rank 1，RRF = 1/61 + 1/61 ≈ 0.0328
-        # c=20 / c=30 各只在单路 rank 2，RRF = 1/62 ≈ 0.0161
+        # c=10 在两路都是 rank 1，归一化后 score=1.0
+        # c=20 / c=30 各只在单路 rank 2，分数约为 0.492
         async def fake_search(query, top_k, entity_tags, **kwargs):
             if query == "q1":
                 return [self._make_result(10), self._make_result(20)]
@@ -510,6 +531,8 @@ class TestMultiQueryRRF:
         ids_in_order = [item.chunk_id for item in r]
         assert ids_in_order[0] == 10  # 双路命中分数最高
         assert set(ids_in_order) == {10, 20, 30}
+        assert r[0].score == pytest.approx(1.0)
+        assert all(0.0 <= item.score <= 1.0 for item in r)
 
     @pytest.mark.asyncio
     async def test_one_path_failure_others_continue(self):
@@ -546,9 +569,80 @@ class TestMultiQueryRRF:
             )
         assert len(r) == 3
 
+    @pytest.mark.asyncio
+    async def test_rrf_score_normalized_by_valid_query_count(self):
+        """multi_query 子查询数量增加时，RRF 分数不应超过 1.0。"""
+        from app.api.v2.endpoints.query import _multi_query_search
+
+        async def fake_search(query, top_k, entity_tags, **kwargs):
+            return [self._make_result(10), self._make_result(20)]
+
+        with patch(
+            "app.api.v2.endpoints.query.hybrid_search", new=AsyncMock(side_effect=fake_search)
+        ):
+            r = await _multi_query_search(
+                queries=["q1", "q2", "q3", "q4"], top_k=2, entity_tags=None, rrf_k=60
+            )
+        assert r[0].chunk_id == 10
+        assert r[0].score == pytest.approx(1.0)
+        assert r[1].score < 1.0
+
+    @pytest.mark.asyncio
+    async def test_empty_paths_do_not_reduce_normalized_score(self):
+        """空结果路径不计入归一化分母，避免稀释有效召回。"""
+        from app.api.v2.endpoints.query import _multi_query_search
+
+        async def fake_search(query, top_k, entity_tags, **kwargs):
+            if query == "empty":
+                return []
+            return [self._make_result(10)]
+
+        with patch(
+            "app.api.v2.endpoints.query.hybrid_search", new=AsyncMock(side_effect=fake_search)
+        ):
+            r = await _multi_query_search(
+                queries=["ok", "empty"], top_k=2, entity_tags=None, rrf_k=60
+            )
+        assert len(r) == 1
+        assert r[0].score == pytest.approx(1.0)
+
 
 # ════════════════════════════════════════════════════════════════
-# 6. Schema 校验 + KB CRUD 暴露 retrieval_config
+# 6. generate_answer LLM kwargs
+# ════════════════════════════════════════════════════════════════
+
+
+class TestGenerateAnswerLLM:
+    @pytest.mark.asyncio
+    async def test_query_generate_answer_uses_unified_provider_prefix_resolution(self):
+        """/v2/query 生成答案应复用统一前缀推断。"""
+        from types import SimpleNamespace
+
+        from app.api.v2.endpoints.query import generate_answer
+
+        resp = MagicMock()
+        resp.choices = [MagicMock(message=MagicMock(content="答案"))]
+        with patch("app.api.v2.endpoints.query.get_settings") as mock_settings, \
+             patch("litellm.acompletion", new=AsyncMock(return_value=resp)) as mock_acomp:
+            mock_settings.return_value = SimpleNamespace(
+                litellm_model="Qwen/Qwen3-8B",
+                litellm_api_key="sk-test",
+                litellm_api_base="https://api.siliconflow.cn/v1",
+                litellm_timeout=60.0,
+                litellm_num_retries=0,
+            )
+            answer = await generate_answer(
+                query="测试",
+                context="上下文",
+                session_id=None,
+                db=MagicMock(),
+            )
+        assert answer == "答案"
+        assert mock_acomp.call_args.kwargs["model"] == "openai/Qwen/Qwen3-8B"
+
+
+# ════════════════════════════════════════════════════════════════
+# 7. Schema 校验 + KB CRUD 暴露 retrieval_config
 # ════════════════════════════════════════════════════════════════
 
 

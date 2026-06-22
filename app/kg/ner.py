@@ -25,6 +25,7 @@ import litellm
 
 from app.core.async_utils import wait_for_named
 from app.core.config import get_settings
+from app.llm.client import build_completion_kwargs
 
 logger = logging.getLogger(__name__)
 
@@ -58,39 +59,19 @@ def _resolve_ner_kwargs(text: str) -> dict[str, Any]:
     优先用 KG_NER_MODEL；缺省则复用 LITELLM_MODEL（与 chat 同源）。
     """
     settings = get_settings()
-    model = settings.kg_ner_model or settings.litellm_model
-    if not model:
-        raise ValueError(
-            "NER 模型未配置：请在 .env 中设置 KG_NER_MODEL 或 LITELLM_MODEL"
-        )
-
-    # 自动补厂商前缀的逻辑复用 chat client 的策略（这里简化：
-    # 模型名带 / 直接用；否则按 api_base 域名推断）
-    if "/" not in model and settings.litellm_api_base:
-        if "deepseek.com" in settings.litellm_api_base:
-            model = f"deepseek/{model}"
-        elif "dashscope.aliyuncs.com" in settings.litellm_api_base:
-            model = f"dashscope/{model}"
-        elif "open.bigmodel.cn" in settings.litellm_api_base:
-            model = f"zhipu/{model}"
-
-    kwargs: dict[str, Any] = {
-        "model": model,
-        "messages": [
+    return build_completion_kwargs(
+        messages=[
             {"role": "system", "content": NER_SYSTEM_PROMPT},
             {"role": "user", "content": text},
         ],
+        model=settings.kg_ner_model,
+        fallback_model=settings.litellm_model,
+        required_model_label="KG_NER_MODEL 或 LITELLM_MODEL",
         # 强制 JSON 输出。注意：并非所有模型都支持此参数，不支持的会被静默忽略，
         # 此时我们靠 Prompt 中"仅返回 JSON"的硬性要求兜底
-        "response_format": {"type": "json_object"},
-        "timeout": settings.litellm_timeout,
-        "num_retries": settings.litellm_num_retries,
-    }
-    if settings.litellm_api_key:
-        kwargs["api_key"] = settings.litellm_api_key
-    if settings.litellm_api_base:
-        kwargs["api_base"] = settings.litellm_api_base
-    return kwargs
+        response_format={"type": "json_object"},
+        settings_obj=settings,
+    )
 
 
 def _parse_entities(content: str) -> list[dict]:

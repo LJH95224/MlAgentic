@@ -24,10 +24,10 @@ import uuid
 from app.agent.context import get_current_kb_ids
 from app.core.config import get_settings
 from app.rag.embedding import aembed_texts
+from app.rag.filters import _build_filter_expr, get_current_role
 from app.rag.milvus_client import get_milvus_client
 from app.rag.naming import build_kb_collection_name
 from app.rag.reranker import RerankResult, get_reranker
-from app.rag.retriever import _build_filter_expr, _format_hits, get_current_role
 
 logger = logging.getLogger(__name__)
 
@@ -38,9 +38,12 @@ logger = logging.getLogger(__name__)
 class HybridSearchResult:
     """混合检索单条结果。"""
 
-    __slots__ = ("chunk_id", "content", "document_id", "score",
-                 "entity_tags", "heading_path", "block_type",
-                 "page_number", "metadata", "source_collection")
+    __slots__ = (
+        "chunk_id", "content", "document_id", "score",
+        "vector_score", "bm25_score", "rrf_score", "rerank_score",
+        "entity_tags", "heading_path", "block_type",
+        "page_number", "metadata", "source_collection",
+    )
 
     def __init__(
         self,
@@ -49,6 +52,10 @@ class HybridSearchResult:
         content: str = "",
         document_id: str = "",
         score: float = 0.0,
+        vector_score: float | None = None,
+        bm25_score: float | None = None,
+        rrf_score: float | None = None,
+        rerank_score: float | None = None,
         entity_tags: list[str] | None = None,
         heading_path: list[str] | None = None,
         block_type: str = "",
@@ -60,6 +67,10 @@ class HybridSearchResult:
         self.content = content
         self.document_id = document_id
         self.score = score
+        self.vector_score = vector_score
+        self.bm25_score = bm25_score
+        self.rrf_score = rrf_score
+        self.rerank_score = rerank_score
         self.entity_tags = entity_tags or []
         self.heading_path = heading_path or []
         self.block_type = block_type
@@ -146,13 +157,21 @@ async def hybrid_search(
     )
 
     # 多 Collection 检索 + 合并
+    # 异常策略（AGT-04 对齐）：
+    #   - 单 collection：失败直接冒泡，端点层兜底响应，Agent tool_node 触发错误反思
+    #   - 多 collection：单个分库失败 warning + 继续；若所有目标分库都失败才抛出
+    #   - collection 不存在：保持跳过（属于预期场景，不是错误）
     all_results: list[HybridSearchResult] = []
+    existing_collections = [c for c in target_collections if client.has_collection(c)]
+    for missing in (set(target_collections) - set(existing_collections)):
+        logger.warning("hybrid_search: collection=%s 不存在，跳过", missing)
+    if not existing_collections:
+        logger.info("hybrid_search: 目标 collection 均不存在，返回空结果")
+        return []
 
-    for collection in target_collections:
-        if not client.has_collection(collection):
-            logger.warning("hybrid_search: collection=%s 不存在，跳过", collection)
-            continue
-
+    last_error: Exception | None = None
+    failed_collections: list[str] = []
+    for collection in existing_collections:
         try:
             # MilvusClient 是同步 gRPC 调用，用 to_thread 避免阻塞事件循环
             results = await asyncio.to_thread(
@@ -174,7 +193,7 @@ async def hybrid_search(
                 collection,
                 e,
             )
-            # 降级：纯向量检索
+            # 降级：纯向量检索（产品决策，不视为吞异常）
             try:
                 results = await asyncio.to_thread(
                     _fallback_dense_search,
@@ -192,6 +211,20 @@ async def hybrid_search(
                     collection,
                     inner_e,
                 )
+                last_error = inner_e
+                failed_collections.append(collection)
+
+    # 全部目标分库都失败 → 抛出最后一次异常，让上层（端点 / Agent tool_node）反思
+    if failed_collections and len(failed_collections) == len(existing_collections):
+        logger.error(
+            "hybrid_search: 全部目标 collection 检索失败 collections=%s",
+            failed_collections,
+        )
+        # last_error 必定非空（与 failed_collections 同步赋值），用 RuntimeError 包一层
+        # 保留原始异常链，方便 AGT-04 把堆栈喂给 LLM
+        raise RuntimeError(
+            f"hybrid_search 全部目标 collection 失败：{failed_collections}"
+        ) from last_error
 
     # 合并重排（按 score 降序）
     all_results.sort(key=lambda r: r.score, reverse=True)
@@ -235,7 +268,8 @@ async def hybrid_search(
         original = merged[rr.index] if rr.index < len(merged) else None
         if original is None:
             continue
-        # 用 Reranker 分数覆盖原 score
+        # 用 Reranker 分数覆盖主排序 score，同时保留精排前的 rrf/vector 分项分数。
+        original.rerank_score = rr.relevance_score
         original.score = rr.relevance_score
         final_results.append(original)
 
@@ -305,7 +339,8 @@ def _search_single_collection(
             output_fields=output_fields,
         )
 
-    return _parse_search_results(raw_results, collection)
+    score_kind = "rrf" if bm25_enable else "vector"
+    return _parse_search_results(raw_results, collection, score_kind=score_kind)
 
 
 def _fallback_dense_search(
@@ -327,11 +362,14 @@ def _fallback_dense_search(
         expr=filter_expr,
         output_fields=output_fields,
     )
-    return _parse_search_results(raw_results, collection)
+    return _parse_search_results(raw_results, collection, score_kind="vector")
 
 
 def _parse_search_results(
-    raw_results: list, collection: str
+    raw_results: list,
+    collection: str,
+    *,
+    score_kind: str,
 ) -> list[HybridSearchResult]:
     """解析 Milvus search/hybrid_search 返回结果为 HybridSearchResult 列表。"""
     results: list[HybridSearchResult] = []
@@ -347,6 +385,8 @@ def _parse_search_results(
             continue
         entity = hit.get("entity", {})
         distance = hit.get("distance", 0.0)
+        vector_score = distance if score_kind == "vector" else None
+        rrf_score = distance if score_kind == "rrf" else None
 
         results.append(
             HybridSearchResult(
@@ -354,6 +394,10 @@ def _parse_search_results(
                 content=entity.get("content", ""),
                 document_id=entity.get("document_id", ""),
                 score=distance,
+                vector_score=vector_score,
+                bm25_score=None,
+                rrf_score=rrf_score,
+                rerank_score=None,
                 entity_tags=entity.get("entity_tags") or [],
                 heading_path=entity.get("heading_path") or [],
                 block_type=entity.get("block_type", ""),

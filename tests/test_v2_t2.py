@@ -103,6 +103,10 @@ class TestHybridSearchResult:
             content="测试内容",
             document_id="doc-1",
             score=0.95,
+            vector_score=0.91,
+            bm25_score=0.72,
+            rrf_score=0.81,
+            rerank_score=0.95,
             entity_tags=["台风"],
             heading_path=["第1章"],
             block_type="paragraph",
@@ -110,6 +114,10 @@ class TestHybridSearchResult:
         )
         assert result.chunk_id == 123
         assert result.score == 0.95
+        assert result.vector_score == 0.91
+        assert result.bm25_score == 0.72
+        assert result.rrf_score == 0.81
+        assert result.rerank_score == 0.95
         assert result.heading_path == ["第1章"]
         assert result.block_type == "paragraph"
 
@@ -121,6 +129,10 @@ class TestHybridSearchResult:
         assert result.entity_tags == []
         assert result.heading_path == []
         assert result.score == 0.0
+        assert result.vector_score is None
+        assert result.bm25_score is None
+        assert result.rrf_score is None
+        assert result.rerank_score is None
 
 
 # ════════════════════════════════════════════════════════════════
@@ -177,6 +189,8 @@ class TestHybridSearch:
             assert results[0].content == "台风"
             # NoopReranker 不应把原始检索分数覆盖成 1.0
             assert results[0].score == 0.95
+            assert results[0].rrf_score == 0.95
+            assert results[0].rerank_score == 0.95
             assert mock_client.hybrid_search.called
 
     @pytest.mark.asyncio
@@ -218,6 +232,9 @@ class TestHybridSearch:
 
             assert len(results) == 1
             assert results[0].content == "降雨"
+            assert results[0].vector_score == 0.88
+            assert results[0].rrf_score is None
+            assert results[0].rerank_score == 0.88
             # BM25 禁用时应走 search 而非 hybrid_search
             assert mock_client.search.called
             assert not mock_client.hybrid_search.called
@@ -279,6 +296,95 @@ class TestHybridSearch:
 
             assert len(results) == 1
             assert results[0].content == "降级结果"
+            assert results[0].vector_score == 0.80
+            assert results[0].rrf_score is None
+
+    @pytest.mark.asyncio
+    async def test_hybrid_search_total_failure_raises(self):
+        """单 collection hybrid + fallback 都失败 → 抛 RuntimeError（AGT-04）。
+
+        P1-8：retriever 不再静默吞异常。让上层（端点 / Agent tool_node）兜底，
+        从而触发 ReAct 错误反思链路（PRD AGT-04）。
+        """
+        from app.rag.hybrid_retriever import hybrid_search
+
+        with patch("app.rag.hybrid_retriever.get_settings") as mock_settings, \
+             patch("app.rag.hybrid_retriever.get_milvus_client") as mock_client_fn, \
+             patch("app.rag.hybrid_retriever.get_current_role", return_value="ALL"), \
+             patch("app.rag.hybrid_retriever.get_current_kb_ids", return_value=[uuid.uuid4()]), \
+             patch("app.rag.hybrid_retriever.aembed_texts", new_callable=AsyncMock) as mock_embed:
+
+            settings = MagicMock()
+            settings.bm25_enable = True
+            settings.rrf_k = 60
+            settings.milvus_collection = "knowledge_chunks"
+            mock_settings.return_value = settings
+
+            mock_embed.return_value = [[0.1] * 4096]
+
+            mock_client = MagicMock()
+            mock_client.has_collection.return_value = True
+            mock_client.hybrid_search.side_effect = RuntimeError("Milvus down")
+            mock_client.search.side_effect = RuntimeError("dense also down")
+            mock_client_fn.return_value = mock_client
+
+            with pytest.raises(RuntimeError, match="全部目标 collection 失败"):
+                await hybrid_search("测试", top_k=5)
+
+    @pytest.mark.asyncio
+    async def test_hybrid_search_partial_collection_failure_returns_survivors(self):
+        """多 collection 时单个分库失败不应让整个查询全废，其他分库结果照常返回。"""
+        from app.rag.hybrid_retriever import hybrid_search
+
+        # 两个 KB → 两个 collection
+        kb1, kb2 = uuid.uuid4(), uuid.uuid4()
+
+        with patch("app.rag.hybrid_retriever.get_settings") as mock_settings, \
+             patch("app.rag.hybrid_retriever.get_milvus_client") as mock_client_fn, \
+             patch("app.rag.hybrid_retriever.get_current_role", return_value="ALL"), \
+             patch("app.rag.hybrid_retriever.get_current_kb_ids", return_value=[kb1, kb2]), \
+             patch("app.rag.hybrid_retriever.aembed_texts", new_callable=AsyncMock) as mock_embed, \
+             patch("app.rag.hybrid_retriever.get_reranker") as mock_reranker:
+
+            settings = MagicMock()
+            settings.bm25_enable = True
+            settings.rrf_k = 60
+            settings.milvus_collection = "knowledge_chunks"
+            mock_settings.return_value = settings
+            mock_embed.return_value = [[0.1] * 4096]
+
+            from app.rag.naming import build_kb_collection_name
+            c1 = build_kb_collection_name(kb1)
+            c2 = build_kb_collection_name(kb2)
+
+            # c1 双路+降级都失败；c2 主路成功
+            def hybrid_side(*, collection_name, **_kwargs):
+                if collection_name == c1:
+                    raise RuntimeError("c1 down")
+                return [[{"distance": 0.9, "entity": {
+                    "chunk_id": 7, "content": "c2 命中", "document_id": "d7",
+                    "entity_tags": [], "heading_path": [],
+                    "block_type": "paragraph", "page_number": None, "metadata": {},
+                }}]]
+
+            def dense_side(*, collection_name, **_kwargs):
+                # c1 的降级也失败
+                raise RuntimeError(f"{collection_name} dense down")
+
+            mock_client = MagicMock()
+            mock_client.has_collection.return_value = True
+            mock_client.hybrid_search.side_effect = hybrid_side
+            mock_client.search.side_effect = dense_side
+            mock_client_fn.return_value = mock_client
+
+            from app.rag.reranker import NoopReranker
+            mock_reranker.return_value = NoopReranker()
+
+            results = await hybrid_search("测试", top_k=5)
+
+            # c2 的结果保留下来，不会因 c1 失败而清空
+            assert len(results) == 1
+            assert results[0].content == "c2 命中"
 
 
 # ════════════════════════════════════════════════════════════════

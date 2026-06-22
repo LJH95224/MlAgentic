@@ -18,6 +18,7 @@ from app.api import error_codes
 from app.api.deps import get_db
 from app.api.exceptions import BusinessError
 from app.core.config import get_settings
+from app.llm.client import build_completion_kwargs
 from app.rag.citation import (
     build_citation_system_prompt,
     build_context_with_citation,
@@ -191,16 +192,16 @@ async def _generate_answer(
 
     try:
         litellm.num_retries = settings.litellm_num_retries
+        kwargs = build_completion_kwargs(
+            messages=messages,
+            model=settings.litellm_model,
+            required_model_label="LITELLM_MODEL",
+            temperature=0.3,
+            max_tokens=2000,
+            settings_obj=settings,
+        )
         response = await asyncio.wait_for(
-            litellm.acompletion(
-                model=settings.litellm_model,
-                messages=messages,
-                api_key=settings.litellm_api_key,
-                api_base=settings.litellm_api_base,
-                temperature=0.3,
-                max_tokens=2000,
-                timeout=settings.litellm_timeout,
-            ),
+            litellm.acompletion(**kwargs),
             timeout=hard_timeout,
         )
         return response.choices[0].message.content or ""

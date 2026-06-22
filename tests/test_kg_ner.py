@@ -124,6 +124,18 @@ def mock_settings(monkeypatch):
     return fake
 
 
+def test_resolve_ner_kwargs_uses_unified_provider_prefix_resolution(mock_settings):
+    """KG NER 应复用统一前缀推断，Qwen/Qwen3 需补 openai/。"""
+    from app.kg.ner import _resolve_ner_kwargs
+
+    mock_settings.kg_ner_model = "Qwen/Qwen3-8B"
+    mock_settings.litellm_api_base = "https://api.siliconflow.cn/v1"
+
+    kwargs = _resolve_ner_kwargs("北京今天天气晴")
+    assert kwargs["model"] == "openai/Qwen/Qwen3-8B"
+    assert kwargs["api_base"] == "https://api.siliconflow.cn/v1"
+
+
 @pytest.mark.asyncio
 async def test_run_ner_returns_parsed_entities(mock_settings, monkeypatch):
     """正常流程：mock litellm.acompletion 返回标准 JSON。"""
