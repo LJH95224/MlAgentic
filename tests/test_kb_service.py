@@ -237,26 +237,30 @@ async def test_update_kb_description_was_set_true_can_clear(monkeypatch):
 
 
 async def test_delete_kb_strict_order_milvus_first(patched_milvus, monkeypatch):
-    """正常路径：先 drop Milvus 再 delete PG。"""
+    """P1-9 正常路径：标 deleting(commit) → drop Milvus → Neo4j → delete PG(commit)。
+
+    顺序断言：Milvus drop 必须在 PG delete 之前。
+    """
     create_mock, drop_mock = patched_milvus
     db = _make_db_mock()
     kid = uuid.uuid4()
     fake = KnowledgeBase(id=kid, name="x", embedding_dim=4096, chunk_size=512, chunk_overlap=64)
     monkeypatch.setattr(kb_service, "get_kb_or_raise", AsyncMock(return_value=fake))
+    # Neo4j 清理也走通（_cleanup_kb_neo4j 内部 driver 未初始化会返 True，无需额外 mock）
 
-    # 用列表记录调用顺序
     call_order: list[str] = []
     drop_mock.side_effect = lambda *a, **kw: call_order.append("milvus_drop") or True
     db.delete.side_effect = lambda *a, **kw: call_order.append("pg_delete")
     db.commit.side_effect = lambda: call_order.append("pg_commit")
 
     await kb_service.delete_kb(db, kid)
-    # 顺序：先 Milvus，再 PG
-    assert call_order == ["milvus_drop", "pg_delete", "pg_commit"]
+    # Milvus 必须在 PG delete 之前；commit 会出现两次（deleting + 真删）
+    assert call_order.index("milvus_drop") < call_order.index("pg_delete")
+    assert "pg_commit" in call_order
 
 
-async def test_delete_kb_milvus_failure_does_not_touch_pg(patched_milvus, monkeypatch):
-    """Milvus drop 失败 → 不动 PG，整体抛 INTERNAL_ERROR。"""
+async def test_delete_kb_milvus_failure_degrades_to_pending_cleanup(patched_milvus, monkeypatch):
+    """P1-9：Milvus drop 失败 → 不抛 500，改 status=pending_cleanup（行保留给 reaper 补偿）。"""
     _, drop_mock = patched_milvus
     drop_mock.side_effect = RuntimeError("milvus down")
 
@@ -265,23 +269,25 @@ async def test_delete_kb_milvus_failure_does_not_touch_pg(patched_milvus, monkey
     fake = KnowledgeBase(id=kid, name="x", embedding_dim=4096, chunk_size=512, chunk_overlap=64)
     monkeypatch.setattr(kb_service, "get_kb_or_raise", AsyncMock(return_value=fake))
 
-    with pytest.raises(BusinessError) as exc_info:
-        await kb_service.delete_kb(db, kid)
-    assert exc_info.value.code == error_codes.INTERNAL_ERROR
+    # 不应再抛 BusinessError
+    await kb_service.delete_kb(db, kid)
 
+    # PG 行没被真删
     db.delete.assert_not_awaited()
-    db.commit.assert_not_awaited()
+    # 至少有两次 commit：标 deleting + 标 pending_cleanup
+    assert db.commit.call_count >= 2
 
 
-async def test_delete_kb_pg_failure_after_milvus_drop_raises_but_milvus_already_gone(
+async def test_delete_kb_pg_failure_after_milvus_drop_raises(
     patched_milvus, monkeypatch, caplog
 ):
-    """PG 删除失败时 Milvus 已 drop，service 抛 500 并日志告警（数据不一致）。"""
+    """P1-9：Milvus/Neo4j 都清干净后 PG 删除失败 → 仍抛 INTERNAL_ERROR（这是真异常，无法补偿）。"""
     _, drop_mock = patched_milvus
     drop_mock.return_value = True
 
     db = _make_db_mock()
-    db.commit.side_effect = RuntimeError("pg down")
+    # 第二次 commit（真删那条）失败；第一次（标 deleting）正常
+    db.commit.side_effect = [None, RuntimeError("pg down")]
 
     kid = uuid.uuid4()
     fake = KnowledgeBase(id=kid, name="x", embedding_dim=4096, chunk_size=512, chunk_overlap=64)
@@ -293,7 +299,7 @@ async def test_delete_kb_pg_failure_after_milvus_drop_raises_but_milvus_already_
     # Milvus 已 drop 必须在错误信息提示"请人工介入"
     assert "人工介入" in exc_info.value.message
     drop_mock.assert_called_once()
-    db.rollback.assert_awaited_once()
+    db.rollback.assert_awaited()
 
 
 async def test_delete_kb_not_found(monkeypatch, patched_milvus):

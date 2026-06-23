@@ -1038,6 +1038,34 @@ python scripts/kg_smoke.py
 
 ## 历史变更
 
+- **2026-06-22**：V2 hardening Batch 2 收尾 · B M-04 + A P2-12 + B M-07
+  - **B M-04 Trace 写入异步化**：[app/observability/tracer.py](../app/observability/tracer.py) `__aexit__` 改为 `asyncio.create_task(self._flush_to_db())` fire-and-forget + `_trace_flush_done` 回调（捕获 task.exception() 仅 warning）。高 QPS 下 `/v2/query` 尾部不再等 PG 写入完成。测试 [tests/test_v2_t3.py](../tests/test_v2_t3.py) 新增 `test_tracer_exit_schedules_flush_as_task`。
+  - **A P2-12 死代码清理**：删除 `app/tasks/ingest_task_v1.py`（V1.5 七步管道归档，V2.0 已全面替换）；[app/tasks/ingest_task.py](../app/tasks/ingest_task.py) docstring 同步更新。
+  - **B M-07 top_k 边界测试**：[tests/test_rag_retriever.py](../tests/test_rag_retriever.py) 新增 `test_do_search_top_k_boundary_values_preserved` 覆盖 4 个边界（1 / 50 / -3 / 51），与既有 `test_do_search_clamps_top_k` 联合形成完整 clamp 测试矩阵。
+  - **Batch 2 收尾**：B M-01 / A P1-9 / B M-06 / B M-04 / A P2-12 / B M-07 全部完成，[docs/0617/xiugai.md](0617/xiugai.md) 第三段 6 项压完。全量回归 **850 passed / 41 skipped / 0 failed**。
+
+- **2026-06-22**：V2 hardening Batch 2 · A P1-9 + B M-06 完成（KB 删除补偿队列 + kb_id 兜底过滤）
+  - **A P1-9 数据模型**：[app/models/kb_file.py](../app/models/kb_file.py) / [app/models/knowledge_base.py](../app/models/knowledge_base.py) 各加 `deleting` / `pending_cleanup` 状态 + `cleanup_retry_count` 字段；KB 表补 `updated_at`（index + onupdate）。
+  - **A P1-9 主路径**：[app/services/kb_service.py](../app/services/kb_service.py) `delete_kb` 与 [app/services/kb_file_service.py](../app/services/kb_file_service.py) `delete_file` 改"失败降级为补偿"——revoke → 标 deleting → 同步清外存(Milvus/Neo4j 各返 bool) → 全成功真删 / 任一失败改 pending_cleanup；DELETE 端点对用户始终返 200，不再因外存抖动抛 500。`_cleanup_*` 系列函数改返 bool。
+  - **A P1-9 listing 过滤**：`list_kbs` / `list_files` 默认隐藏 deleting / pending_cleanup（用户视角已删）；详情接口仍可查 pending_cleanup。
+  - **A P1-9 补偿 reaper**：新增 [app/tasks/cleanup_reaper_task.py](../app/tasks/cleanup_reaper_task.py) 扫 `pending_cleanup` 行重试外存清理，成功真删 / 失败 retry_count + 1 / 超阈值仅告警；注册到 [app/tasks/celery_app.py](../app/tasks/celery_app.py) beat_schedule（`reap-pending-cleanup`，默认 5min）。配置 `CLEANUP_REAPER_INTERVAL_S` / `CLEANUP_REAPER_MAX_RETRY` / `CLEANUP_REAPER_ENABLE` 加到 [app/core/config.py](../app/core/config.py) + [.env.example](../.env.example)。
+  - **B M-06**：[app/rag/filters.py](../app/rag/filters.py) `_build_filter_expr` 加 `kb_ids` 参数注入 `kb_id IN [...]` 兜底过滤（与 contextvar 双保险）；[app/rag/hybrid_retriever.py](../app/rag/hybrid_retriever.py) 调用时传入 contextvar kb_ids。None/空 = 全局 collection 不加子句（V1.0 默认不变）。
+  - **测试**：新增 [tests/test_kb_compensation.py](../tests/test_kb_compensation.py) 23 case；同步更新 [tests/test_kb_service.py](../tests/test_kb_service.py) / [tests/test_s3_cleanup.py](../tests/test_s3_cleanup.py) / [tests/test_v1_5_models.py](../tests/test_v1_5_models.py) 反映 P1-9 新契约。全量回归 848 passed / 41 skipped / 0 failed。
+  - **B M-01 增量迁移示范**：本次模型变更需 `alembic revision --autogenerate -m "p1_9_kb_deletion_compensation_status"`，正好补上 B M-01 缺失的增量迁移示范。
+  - **用户验收**：`alembic revision --autogenerate -m "p1_9_kb_deletion_compensation_status"` → 人工 review（KbFile cleanup_retry_count / KB updated_at+index+cleanup_retry_count）→ `alembic upgrade head` / `downgrade -1` 双向 → `pytest tests/ -v --tb=short`
+
+- **2026-06-22**：V2 hardening Batch 2 · B M-01 完成（引入 Alembic 迁移体系）
+  - 新增 [alembic.ini](../alembic.ini)（`sqlalchemy.url` 故意留空，env.py 注入避免与 .env 漂移）
+  - 新增 [alembic/env.py](../alembic/env.py)（async 版本，`async_engine_from_config` + `connection.run_sync(do_run_migrations)`；从 `app.core.config.get_settings().database_url` 取 URL；`compare_type=True` + `compare_server_default=True`；NullPool；asyncpg 关 SSL 兼容 Windows）
+  - 新增 [alembic/script.py.mako](../alembic/script.py.mako)（迁移脚本模板，中文 docstring）+ `alembic/versions/.gitkeep` 占位
+  - [requirements.txt](../requirements.txt) 数据库段新增 `alembic>=1.13.0`
+  - [app/main.py](../app/main.py) `_build_v2_compat_alter_sql` / `_create_all_with_retry` 注释更新：明确"开发态兜底，生产/正式部署走 `alembic upgrade head`"，并标注新增列**统一走 Alembic，不再扩张 `_V2_COMPAT_COLUMNS`**
+  - [README.md](../README.md) 新增 §2.5「数据库迁移（Alembic）」段，覆盖新部署 / 旧库 `stamp head` / 新增迁移三种姿势
+  - [docs/0617/xiugai.md](0617/xiugai.md) `B M-01` 勾选 + 补充实际交付清单 / 偏离说明 / 用户验收步骤；同时把 P1-11 `updated_at` 部署备注里"B M-01 引入后此痛点消除"改为陈述句
+  - **偏离原计划**：xiugai.md 原写"补一个 P1-11 `updated_at` 增量迁移作为示范"，因 P1-11 字段已合并进 `kb_file.py`，autogenerate baseline 会一并捕获；增量迁移示范留给下一次真正改 schema 时自然演示
+  - **附带修复**：验收回归时发现 [tests/test_kb06_chat_scope.py](../tests/test_kb06_chat_scope.py) 6 case `monkeypatch.setattr("app.rag.retriever.aembed_texts", mock)` 因 P2-13 之后 retriever 改为委托 `hybrid_search`、不再 import `aembed_texts` 而全数 ERROR；修复为 `app.rag.hybrid_retriever.aembed_texts`，6 case 恢复 GREEN
+  - **验收命令**（用户手动执行）：`uv pip install alembic -i https://pypi.tuna.tsinghua.edu.cn/simple` → `alembic revision --autogenerate -m "baseline_v2"` → 人工 review → `alembic upgrade head` / `downgrade base` 双向跑通 → `alembic stamp head` 演练旧库升级姿势 → `pytest tests/ -v --tb=short`（866 case 全过）
+
 - **2026-06-18**：接口对接文档从“V2 专用”调整为“全项目接口对接”
   - [docs/v2_api_reference.md](v2_api_reference.md) 重写为 TyAgent 全项目接口文档：按当前实际注册路由整理 `/health`、`/api/v1` 会话/聊天/知识库/文件、`/api/v2` query/retrieve/generate/rerank/trace/evaluate/analytics 全量接口，并明确“使用中 / 废弃或不推荐”清单
   - [docs/v2_frontend_guide.md](v2_frontend_guide.md) 重写为全项目前端接口对接指南：给出聊天流式、KB/文件管理、V2 可信问答、Trace、评估、Analytics、高级检索配置的页面级对接策略

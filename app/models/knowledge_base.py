@@ -25,7 +25,18 @@ from app.models.base import Base, UUIDMixin
 KB_STATUS_ACTIVE = "active"
 KB_STATUS_BUILDING = "building"
 KB_STATUS_ERROR = "error"
-KB_STATUS_CHOICES = (KB_STATUS_ACTIVE, KB_STATUS_BUILDING, KB_STATUS_ERROR)
+# P1-9 新增：删除补偿状态机
+# deleting       — 用户已 DELETE，正在同步清理 Milvus / Neo4j；窗口期 < 1s
+# pending_cleanup — 外存清理失败，等 cleanup_reaper_task 后台补偿；list 接口对用户隐藏
+KB_STATUS_DELETING = "deleting"
+KB_STATUS_PENDING_CLEANUP = "pending_cleanup"
+KB_STATUS_CHOICES = (
+    KB_STATUS_ACTIVE,
+    KB_STATUS_BUILDING,
+    KB_STATUS_ERROR,
+    KB_STATUS_DELETING,
+    KB_STATUS_PENDING_CLEANUP,
+)
 
 
 class KnowledgeBase(UUIDMixin, Base):
@@ -105,6 +116,27 @@ class KnowledgeBase(UUIDMixin, Base):
         server_default=func.now(),
         nullable=False,
         comment="创建时间",
+    )
+
+    # ── P1-9 删除补偿相关字段 ──
+    # updated_at：KB 行最后更新时间。P1-9 之前 KB 没有这个字段（KbFile 有，因 reaper 需要心跳）；
+    #   P1-9 引入后用作 cleanup_reaper_task 扫描时的排序依据（旧的 pending_cleanup 优先处理）。
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+        index=True,
+        comment="P1-9 行最后更新时间；pending_cleanup 扫描据此判定优先级",
+    )
+
+    # cleanup_retry_count：见 kb_file.py 同名字段说明
+    cleanup_retry_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default="0",
+        comment="P1-9 待补偿清理重试次数；超过 CLEANUP_REAPER_MAX_RETRY 仅告警",
     )
 
     # ── V2.0 新增字段（T0.2） ──

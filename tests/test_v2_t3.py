@@ -10,6 +10,7 @@
 7. V2 router 挂载
 """
 
+import asyncio
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -66,6 +67,43 @@ class TestTracerLifecycle:
                     pass  # 模拟工作
                 # 禁用时 steps 不应被添加
                 assert len(t.steps) == 0
+
+    @pytest.mark.asyncio
+    async def test_tracer_exit_schedules_flush_as_task(self, monkeypatch):
+        """B M-04：__aexit__ 通过 create_task fire-and-forget 写入 PG，不 await。
+
+        证据链：
+        1. asyncio.create_task 被调一次以上 → 写入走了 task 而非直接 await
+        2. _flush_to_db 最终被 awaited 一次 → task 正常运转
+        """
+        import app.observability.tracer as tracer_mod
+
+        create_task_calls = []
+        original_create_task = asyncio.create_task
+
+        def _spy_create_task(coro, **kw):
+            create_task_calls.append(coro)
+            return original_create_task(coro, **kw)
+
+        monkeypatch.setattr(asyncio, "create_task", _spy_create_task)
+
+        with patch.object(tracer_mod.Tracer, "_flush_to_db", AsyncMock()) as mock_flush:
+            with patch("app.observability.tracer.get_settings") as mock_settings:
+                settings = MagicMock()
+                settings.trace_enable = True
+                mock_settings.return_value = settings
+
+                async with Tracer() as t:
+                    with t.step("retrieve", step_input={"q": "test"}) as s:
+                        s.step_latency_ms = 10
+
+        # 让 fire-and-forget task 跑完
+        await asyncio.sleep(0)
+
+        # 1) create_task 至少被调一次
+        assert len(create_task_calls) >= 1, "Trace __aexit__ 应通过 create_task 调度写入"
+        # 2) _flush_to_db 确实在后台被运行（mock 计数 = task 调度成功并执行完）
+        mock_flush.assert_awaited_once()
 
 
 # ════════════════════════════════════════════════════════════════

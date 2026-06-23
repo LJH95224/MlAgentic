@@ -1,6 +1,6 @@
 """文件入库 Celery 任务（V2.0 IDP-06 十一步管道重构）。
 
-V1.5 七步管道已归档为 ingest_task_v1.py，V2.0 全面替换。
+V2.0 全面替换 V1.5 七步管道（A P2-12 已删除归档文件 ingest_task_v1.py）。
 
 【架构约定 - 同 V1.5】
 - Celery @task 用同步 def；核心 async def _main；体内只调一次 asyncio.run

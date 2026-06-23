@@ -25,16 +25,23 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models.base import Base
 
 
-# 文件入库状态枚举（PRD FILE-02）
+# 文件入库状态枚举（PRD FILE-02 + V2 hardening P1-9 扩展）
 FILE_STATUS_PENDING = "pending"
 FILE_STATUS_PROCESSING = "processing"
 FILE_STATUS_COMPLETED = "completed"
 FILE_STATUS_FAILED = "failed"
+# P1-9 新增：删除补偿状态机
+# deleting       — 用户已 DELETE，正在同步清理外存（Milvus/Neo4j）；该状态窗口期 < 1s
+# pending_cleanup — 外存清理失败，等 cleanup_reaper_task 后台补偿；用户视角已删
+FILE_STATUS_DELETING = "deleting"
+FILE_STATUS_PENDING_CLEANUP = "pending_cleanup"
 FILE_STATUS_CHOICES = (
     FILE_STATUS_PENDING,
     FILE_STATUS_PROCESSING,
     FILE_STATUS_COMPLETED,
     FILE_STATUS_FAILED,
+    FILE_STATUS_DELETING,
+    FILE_STATUS_PENDING_CLEANUP,
 )
 
 
@@ -160,6 +167,17 @@ class KbFile(Base):
         nullable=True,
         default=None,
         comment="入库完成时间（status=completed 时写入）",
+    )
+
+    # ── P1-9 删除补偿计数 ──
+    # 主路径删除外存失败后，行 status 改 pending_cleanup 留给 cleanup_reaper_task 周期重试；
+    # 每跑一轮 reaper 自增 1；超过 cleanup_reaper_max_retry 仅告警不再重试，由运维介入。
+    cleanup_retry_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default="0",
+        comment="P1-9 待补偿清理重试次数；超过 CLEANUP_REAPER_MAX_RETRY 仅告警",
     )
 
     # ── V2.0 新增字段（T0.2） ──

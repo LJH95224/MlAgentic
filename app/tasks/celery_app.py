@@ -43,6 +43,8 @@ _TASK_MODULES: list[str] = [
     "app.tasks.eval_task",
     # P1-11（2026-06-22 起）：卡死 processing 文件回收周期任务
     "app.tasks.reaper_task",
+    # P1-9（2026-06-22 起）：KB / KbFile 外存清理补偿周期任务
+    "app.tasks.cleanup_reaper_task",
 ]
 
 
@@ -87,9 +89,16 @@ celery_app.conf.update(
             "task": "app.tasks.reaper_task.reap_stale_processing_files",
             "schedule": schedule(run_every=_settings.ingest_reaper_interval_s),
             "options": {
-                # 单实例：beat 重复触发时如果队列里还有上一轮任务，跳过本次
-                # 防止周期 < 任务执行时间时堆积（虽然回收任务正常 < 60s 完成）
                 "expires": _settings.ingest_reaper_interval_s,
+            },
+        },
+        # P1-9 删除补偿周期任务
+        # interval 由 CLEANUP_REAPER_INTERVAL_S 控制（默认 300s = 5min）
+        "reap-pending-cleanup": {
+            "task": "app.tasks.cleanup_reaper_task.reap_pending_cleanup",
+            "schedule": schedule(run_every=_settings.cleanup_reaper_interval_s),
+            "options": {
+                "expires": _settings.cleanup_reaper_interval_s,
             },
         },
     },
@@ -97,9 +106,12 @@ celery_app.conf.update(
 
 
 logger.info(
-    "Celery 初始化完成 broker=%s backend=%s reaper_interval=%ds reaper_enable=%s",
+    "Celery 初始化完成 broker=%s backend=%s reaper_interval=%ds reaper_enable=%s "
+    "cleanup_reaper_interval=%ds cleanup_reaper_enable=%s",
     _settings.effective_celery_broker_url,
     _settings.effective_celery_result_backend,
     _settings.ingest_reaper_interval_s,
     _settings.ingest_reaper_enable,
+    _settings.cleanup_reaper_interval_s,
+    _settings.cleanup_reaper_enable,
 )

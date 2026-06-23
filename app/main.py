@@ -53,9 +53,13 @@ _V2_COMPAT_COLUMNS: dict[str, dict[str, str]] = {
 def _build_v2_compat_alter_sql(existing: dict[str, set[str]]) -> list[str]:
     """根据当前 PG 表结构生成 V2 兼容补列 SQL。
 
-    项目当前未引入 Alembic，`create_all` 只能建新表，不能给旧表补列。
-    V1.5 数据库升级到 V2.0 后，如果旧 `knowledge_bases` / `kb_files`
-    表缺少新增列，ORM 查询会因 UndefinedColumn 报 500。
+    历史背景：V1.5 → V2.0 升级期项目尚未引入 Alembic，`create_all` 只能建新表、
+    不能给旧表补列，所以临时硬编码了这套兼容补丁。
+
+    现状（V2 hardening Batch 2 · B M-01 之后）：项目已引入 Alembic（详见 alembic/），
+    新增列 / schema 变更**统一走 `alembic revision --autogenerate` + `upgrade head`**，
+    不再扩张 `_V2_COMPAT_COLUMNS`。本函数保留是为了让 V1.5 阶段直接升上来的
+    旧库还能无痛 boot，等下个版本周期把它彻底删除。
     """
     statements: list[str] = []
     for table_name, columns in _V2_COMPAT_COLUMNS.items():
@@ -107,6 +111,11 @@ async def _create_all_with_retry(max_attempts: int = 10) -> None:
 
     重试 10 次 × 2s 间隔 = 给 PG 最多 20s 启动时间，覆盖绝大多数场景。
     每次重试前 dispose 一下连接池，避免复用挂掉的连接。
+
+    定位说明（B M-01 引入 Alembic 之后）：本函数仅作**开发态兜底**——
+    - 测试环境：pytest fixture 起干净库时 create_all 比走 Alembic 快得多
+    - 旧 V1.5 库：与 _ensure_v2_compat_columns 配合无痛升级 V2.0
+    生产 / 正式部署请走 `alembic upgrade head`（详见 README.md §2.5），不要依赖本函数。
     """
     last_err: Exception | None = None
     for attempt in range(1, max_attempts + 1):
@@ -145,7 +154,8 @@ async def lifespan(app: FastAPI):
 
     logger.info("应用启动 env=%s debug=%s", settings.app_env, settings.app_debug)
 
-    # 启动时建表（开发态，不替代 alembic）
+    # 启动时建表（开发态兜底，新部署应优先 `alembic upgrade head`）
+    # 详见 README.md §2.5 与 _create_all_with_retry / _ensure_v2_compat_columns 注释
     # 带 PG 启动期重试，规避 docker compose 刚拉起 PG 还在 startup recovery 的窗口
     await _create_all_with_retry()
     await _ensure_v2_compat_columns()

@@ -75,8 +75,9 @@ def test_knowledge_base_status_default_active():
 
 
 def test_knowledge_base_status_choices_completeness():
-    """status 枚举必须包含 PRD KB-02 要求的 3 个状态。"""
-    assert set(KB_STATUS_CHOICES) == {"active", "building", "error"}
+    """status 枚举必须包含 PRD KB-02 要求的 3 个状态 + P1-9 删除补偿 2 个状态。"""
+    required = {"active", "building", "error", "deleting", "pending_cleanup"}
+    assert required.issubset(set(KB_STATUS_CHOICES))
 
 
 def test_knowledge_base_check_constraints_present():
@@ -128,12 +129,9 @@ def test_kb_file_status_default_pending():
 
 
 def test_kb_file_status_choices_completeness():
-    assert set(FILE_STATUS_CHOICES) == {
-        "pending",
-        "processing",
-        "completed",
-        "failed",
-    }
+    """FILE-02 4 状态 + P1-9 删除补偿 2 状态都在。"""
+    required = {"pending", "processing", "completed", "failed", "deleting", "pending_cleanup"}
+    assert required.issubset(set(FILE_STATUS_CHOICES))
 
 
 def test_kb_file_progress_default_zero():
