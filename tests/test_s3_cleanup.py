@@ -299,17 +299,19 @@ def test_cleanup_kb_upload_dir_failure_does_not_raise(monkeypatch):
 
 
 async def test_delete_kb_orchestrates_5_steps_in_order(monkeypatch):
-    """KB-05 应按"revoke → milvus drop → neo4j → PG → 磁盘"顺序调用各步骤。"""
+    """P1-9：KB-05 按"revoke → 标deleting(commit) → milvus drop → neo4j → PG delete → PG commit → 磁盘"顺序。
+
+    Milvus / Neo4j 都成功才走真删路径；Neo4j 现在返 bool。
+    """
     call_order: list[str] = []
 
-    # 1) get_kb_or_raise 返一个假 KB
     fake_kb = MagicMock()
     fake_kb.id = uuid.uuid4()
+    fake_kb.description = "x"
     monkeypatch.setattr(
         kb_service, "get_kb_or_raise", AsyncMock(return_value=fake_kb)
     )
 
-    # 2) 各步骤打点
     async def _track_revoke(db, kb_id):
         call_order.append("revoke")
 
@@ -319,6 +321,7 @@ async def test_delete_kb_orchestrates_5_steps_in_order(monkeypatch):
 
     async def _track_neo4j(kb_id):
         call_order.append("neo4j")
+        return True
 
     def _track_disk(kb_id):
         call_order.append("disk")
@@ -328,7 +331,6 @@ async def test_delete_kb_orchestrates_5_steps_in_order(monkeypatch):
     monkeypatch.setattr(kb_service, "_cleanup_kb_neo4j", _track_neo4j)
     monkeypatch.setattr(kb_service, "_cleanup_kb_upload_dir", _track_disk)
 
-    # mock db
     mock_db = MagicMock()
     mock_db.delete = AsyncMock(
         side_effect=lambda x: call_order.append("pg_delete")
@@ -336,28 +338,28 @@ async def test_delete_kb_orchestrates_5_steps_in_order(monkeypatch):
     mock_db.commit = AsyncMock(
         side_effect=lambda: call_order.append("pg_commit")
     )
+    mock_db.execute = AsyncMock()
     mock_db.rollback = AsyncMock()
 
     await kb_service.delete_kb(mock_db, fake_kb.id)
 
-    # 验顺序
-    assert call_order == [
-        "revoke",
-        "milvus_drop",
-        "neo4j",
-        "pg_delete",
-        "pg_commit",
-        "disk",
-    ]
+    # 关键顺序：revoke → milvus_drop → neo4j → pg_delete → pg_commit → disk
+    # （中间有 deleting 标记的 pg_commit，但不影响关键步骤相对顺序）
+    assert call_order.index("revoke") < call_order.index("milvus_drop")
+    assert call_order.index("milvus_drop") < call_order.index("neo4j")
+    assert call_order.index("neo4j") < call_order.index("pg_delete")
+    assert call_order.index("pg_delete") < call_order.index("disk")
+    assert "disk" in call_order  # 全成功才清磁盘
 
 
-async def test_delete_kb_milvus_failure_short_circuits_no_neo4j_no_pg(monkeypatch):
-    """Milvus drop 失败 → 不动 Neo4j / PG / 磁盘。"""
-    from app.api import error_codes
-    from app.api.exceptions import BusinessError
+async def test_delete_kb_milvus_failure_degrades_to_pending_cleanup(monkeypatch):
+    """P1-9：Milvus drop 失败 → 不抛 500，降级 pending_cleanup；Neo4j 仍会尝试（独立 bool）。
 
+    PG 行不被真删（保留给 reaper 补偿），磁盘也不清。
+    """
     fake_kb = MagicMock()
     fake_kb.id = uuid.uuid4()
+    fake_kb.description = "x"
     monkeypatch.setattr(
         kb_service, "get_kb_or_raise", AsyncMock(return_value=fake_kb)
     )
@@ -372,32 +374,29 @@ async def test_delete_kb_milvus_failure_short_circuits_no_neo4j_no_pg(monkeypatc
         MagicMock(side_effect=RuntimeError("milvus down")),
     )
 
-    neo4j_called = []
     pg_delete_called = []
     disk_called = []
 
-    async def _neo4j_should_not_be_called(kb_id):
-        neo4j_called.append(True)
+    async def _neo4j_ok(kb_id):
+        return True  # Neo4j 独立成功
 
     def _disk_should_not_be_called(kb_id):
         disk_called.append(True)
 
-    monkeypatch.setattr(
-        kb_service, "_cleanup_kb_neo4j", _neo4j_should_not_be_called
-    )
-    monkeypatch.setattr(
-        kb_service, "_cleanup_kb_upload_dir", _disk_should_not_be_called
-    )
+    monkeypatch.setattr(kb_service, "_cleanup_kb_neo4j", _neo4j_ok)
+    monkeypatch.setattr(kb_service, "_cleanup_kb_upload_dir", _disk_should_not_be_called)
 
     mock_db = MagicMock()
     mock_db.delete = AsyncMock(side_effect=lambda x: pg_delete_called.append(True))
     mock_db.commit = AsyncMock()
+    mock_db.execute = AsyncMock()
     mock_db.rollback = AsyncMock()
 
-    with pytest.raises(BusinessError) as exc_info:
-        await kb_service.delete_kb(mock_db, fake_kb.id)
-    assert exc_info.value.code == error_codes.INTERNAL_ERROR
+    # 不应再抛 BusinessError —— P1-9 把它降级成 pending_cleanup
+    await kb_service.delete_kb(mock_db, fake_kb.id)
 
-    assert not neo4j_called
-    assert not pg_delete_called
-    assert not disk_called
+    # PG 没真删，磁盘没清
+    assert pg_delete_called == []
+    assert disk_called == []
+    # 至少有标 deleting + 标 pending_cleanup 两次 commit
+    assert mock_db.commit.call_count >= 2

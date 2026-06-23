@@ -19,6 +19,10 @@ python-dotenv>=1.0.1
 # --- 数据库（SQLAlchemy 2.0 async + asyncpg；PostgreSQL 仅存会话/消息/知识库元数据） ---
 sqlalchemy[asyncio]>=2.0.35
 asyncpg>=0.29.0
+# Schema 迁移工具（V2 hardening Batch 2 · B M-01）：管理 PG schema 演进，
+# 取代手工 ALTER TABLE / _ensure_v2_compat_columns 兜底。
+# 详见 alembic/env.py 与 README.md §2.5。
+alembic>=1.13.0
 
 # --- 向量库（Milvus，3.5 阶段启用） ---
 pymilvus>=2.6.0

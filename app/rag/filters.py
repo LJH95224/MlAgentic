@@ -55,10 +55,15 @@ def _build_filter_expr(
     document_id: str | None,
     entity_tags: list[str] | None,
     current_role: str,
+    kb_ids: list[str] | None = None,
 ) -> str:
     """拼装 Milvus filter 表达式（V1/V2 共用）。
 
     基线过滤永远包含权限子句（RAG-04）。其他过滤按传参可选叠加。
+
+    B M-06 新增 ``kb_ids`` 参数：在物理 Collection 隔离之上加一层 ``kb_id IN [...]``
+    兜底过滤。chunk schema 中的 ``kb_id`` 冗余字段（V1.5 §5.4）就是为此设计的——即使
+    Collection 命名规则改变或 contextvar 被绕过，也保证不会跨 KB 召回。
 
     Milvus filter 语法注意：
       - 字符串值要带双引号
@@ -71,6 +76,8 @@ def _build_filter_expr(
         document_id: 限定到具体文档，None 时跳过。
         entity_tags: KG-04 图谱锚定标签数组，任一命中即可，None / 空列表跳过。
         current_role: 当前角色，由 :func:`get_current_role` 提供。
+        kb_ids: B M-06 kb_id 兜底过滤列表。传 None 或空列表时不加该子句
+                （V1.0 全局 collection 场景不需要 kb_id 过滤）。
 
     Returns:
         Milvus filter 表达式字符串，多子句用 ``and`` 连接。
@@ -78,16 +85,18 @@ def _build_filter_expr(
     # 权限基线：硬编码注入（不暴露给 LLM）
     clauses = [f"ARRAY_CONTAINS(allowed_roles, {_milvus_str(current_role)})"]
 
+    # B M-06：kb_id 兜底过滤（纵深防御，不替代 contextvar / Collection 命名隔离）
+    if kb_ids:
+        kb_lit = "[" + ", ".join(_milvus_str(k) for k in kb_ids) + "]"
+        clauses.append(f"kb_id IN {kb_lit}")
+
     if doc_type:
-        # JSON 字段访问 + 字符串等值
         clauses.append(f'metadata["type"] == {_milvus_str(doc_type)}')
 
     if document_id:
         clauses.append(f"document_id == {_milvus_str(document_id)}")
 
     if entity_tags:
-        # KG-04 图谱锚定后注入：召回任一标签匹配的 chunk
-        # 用 Python 列表字面量语法序列化为 Milvus 接受的格式
         tags_lit = "[" + ", ".join(_milvus_str(t) for t in entity_tags) + "]"
         clauses.append(f"ARRAY_CONTAINS_ANY(entity_tags, {tags_lit})")
 

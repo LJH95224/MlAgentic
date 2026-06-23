@@ -209,6 +209,14 @@ class Settings(BaseSettings):
     # 回收任务总开关；本地纯单测 / 演示环境可关
     ingest_reaper_enable: bool = Field(default=True, alias="INGEST_REAPER_ENABLE")
 
+    # --- KB / KbFile 删除外存清理补偿（A P1-9） ---
+    # cleanup_reaper_task 周期间隔，默认 5 min（比 reaper_task 更勤 — 删除是热数据）
+    cleanup_reaper_interval_s: int = Field(default=300, alias="CLEANUP_REAPER_INTERVAL_S")
+    # 最大重试次数（默认 10 ≈ 5 min × 10 = 50 min 内自动兜底；超过后仅告警不再重试）
+    cleanup_reaper_max_retry: int = Field(default=10, alias="CLEANUP_REAPER_MAX_RETRY")
+    # 补偿任务总开关
+    cleanup_reaper_enable: bool = Field(default=True, alias="CLEANUP_REAPER_ENABLE")
+
     # --- 会话上下文窗口（SES-09） ---
     # 从 chat_messages 加载多少条历史进入 LangGraph；system 必含、不计数
     context_window_messages: int = Field(default=20, alias="CONTEXT_WINDOW_MESSAGES")

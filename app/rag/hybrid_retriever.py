@@ -134,7 +134,15 @@ async def hybrid_search(
     query_vec = vectors[0]
 
     # 拼过滤表达式
-    filter_expr = _build_filter_expr(doc_type, document_id, entity_tags, current_role)
+    # B M-06：把 contextvar current_kb_ids 序列化为字符串列表传入 _build_filter_expr
+    # 作为 kb_id 兜底过滤。None = 全局 collection（如 V1.0 默认），不加该子句。
+    filter_expr = _build_filter_expr(
+        doc_type=doc_type,
+        document_id=document_id,
+        entity_tags=entity_tags,
+        current_role=current_role,
+        kb_ids=[str(k) for k in current_kb_ids] if current_kb_ids else None,
+    )
 
     # 输出字段
     output_fields = [

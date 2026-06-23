@@ -9,7 +9,7 @@
 - 每个 step 记录 step_type / step_latency_ms / step_input / step_output
 - 根 step（parent_step=None）额外记录 total_latency_ms
 - trace_enable=False 时所有操作短路，零开销
-- 写入 PG 使用同步方式（V2 阶段简化；T12 阶段优化为异步）
+- 写入 PG 使用 fire-and-forget（B M-04，2026-06-22 起），不阻塞 /v2/query 主链路
 
 用法：
     async with Tracer(session_id=session_id, kb_id=kb_id) as t:
@@ -21,6 +21,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 import uuid
@@ -31,6 +32,20 @@ from typing import Any, Generator
 from app.core.config import get_settings
 
 logger = logging.getLogger(__name__)
+
+
+def _trace_flush_done(task: asyncio.Task) -> None:
+    """fire-and-forget 写入任务的 done callback（B M-04）。
+
+    职责：捕获异常仅 warning，防止 PG 抖动反传到业务主链路；
+    同时调一下 task.exception() 防 asyncio 报"never awaited"警告。
+    """
+    try:
+        exc = task.exception()
+    except asyncio.CancelledError:
+        return
+    if exc is not None:
+        logger.warning("Trace 写入 PG 失败（已忽略）: %s", exc)
 
 
 @dataclass
@@ -97,12 +112,20 @@ class Tracer:
         elapsed = time.perf_counter() - self._start_time
         self._total_latency_ms = int(elapsed * 1000)
 
-        # 批量写入 PG（异步任务）
+        # B M-04：fire-and-forget 异步写入 PG，不阻塞主链路。
+        # 高 QPS 下 trace 写入是 /v2/query 的尾部瓶颈；create_task 后立即返回，
+        # 让 ASGI worker 能去处理下一个请求。task 异常仅 warning，不冒泡到业务。
         try:
-            await self._flush_to_db()
-        except Exception as e:
-            # trace 写入失败不应影响业务主链路
-            logger.warning("Trace 写入 PG 失败（已忽略）: %s", e)
+            task = asyncio.create_task(self._flush_to_db())
+            task.add_done_callback(_trace_flush_done)
+        except RuntimeError as e:
+            # 极端边角：当前线程没有 running event loop（如同步 fixture
+            # 用 trace 但忘了 await）。降级为同步 await 走老路径。
+            logger.warning("Trace 异步调度失败，降级同步写: %s", e)
+            try:
+                await self._flush_to_db()
+            except Exception as inner:  # noqa: BLE001
+                logger.warning("Trace 同步写入也失败（已忽略）: %s", inner)
 
         logger.info(
             "Trace 结束: trace_id=%s steps=%d total=%dms",
@@ -161,8 +184,9 @@ class Tracer:
     async def _flush_to_db(self) -> None:
         """批量写入 agent_traces 表（异步）。
 
-        V2 阶段简化为同步语义（trace 结束时一次性写）；T12 阶段优化为后台 fire-and-forget。
-        通过 AsyncSessionLocal 走与业务层一致的 asyncpg 引擎，避免引入 psycopg2 同步驱动依赖。
+        B M-04 起由 __aexit__ 走 asyncio.create_task fire-and-forget 调用，
+        异常通过 _trace_flush_done 回调捕获，不冒泡到业务主链路。
+        通过 AsyncSessionLocal 走与业务层一致的 asyncpg 引擎。
         """
         from sqlalchemy import insert
         from app.db.session import AsyncSessionLocal

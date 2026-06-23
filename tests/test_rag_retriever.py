@@ -242,6 +242,37 @@ async def test_do_search_clamps_top_k(mock_settings, mock_hybrid_search):
 
 
 @pytest.mark.asyncio
+async def test_do_search_top_k_boundary_values_preserved(mock_settings, mock_hybrid_search):
+    """B M-07：合法边界值 top_k=1 / top_k=50 不应被 clamp 改动。"""
+    # 下边界：1 是合法最小值
+    await _do_search(
+        query="x", top_k=1, doc_type=None, document_id=None, entity_tags=None
+    )
+    assert mock_hybrid_search.call_args.kwargs["top_k"] == 1
+
+    # 上边界：50 是合法最大值
+    mock_hybrid_search.reset_mock()
+    await _do_search(
+        query="x", top_k=50, doc_type=None, document_id=None, entity_tags=None
+    )
+    assert mock_hybrid_search.call_args.kwargs["top_k"] == 50
+
+    # 负数：与 0 同款，回退默认 5
+    mock_hybrid_search.reset_mock()
+    await _do_search(
+        query="x", top_k=-3, doc_type=None, document_id=None, entity_tags=None
+    )
+    assert mock_hybrid_search.call_args.kwargs["top_k"] == 5
+
+    # 51：刚越上界，clamp 到 50
+    mock_hybrid_search.reset_mock()
+    await _do_search(
+        query="x", top_k=51, doc_type=None, document_id=None, entity_tags=None
+    )
+    assert mock_hybrid_search.call_args.kwargs["top_k"] == 50
+
+
+@pytest.mark.asyncio
 async def test_do_search_returns_empty_kb_hint_without_hybrid_call(
     mock_settings, mock_hybrid_search, monkeypatch
 ):

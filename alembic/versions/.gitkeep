@@ -1,0 +1,2 @@
+# 占位文件，让空的 versions/ 目录能进 git。
+# baseline 迁移由 `alembic revision --autogenerate -m "baseline_v2"` 生成（用户操作）。

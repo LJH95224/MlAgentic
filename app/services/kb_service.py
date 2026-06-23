@@ -14,13 +14,17 @@ import logging
 import uuid
 from typing import TYPE_CHECKING
 
-from sqlalchemy import desc, func, select
+from sqlalchemy import desc, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import error_codes
 from app.api.exceptions import BusinessError
-from app.models.knowledge_base import KnowledgeBase
+from app.models.knowledge_base import (
+    KB_STATUS_DELETING,
+    KB_STATUS_PENDING_CLEANUP,
+    KnowledgeBase,
+)
 from app.rag.milvus_client import (
     create_v2_kb_collection,
     drop_kb_collection,
@@ -163,16 +167,28 @@ MAX_PAGE_SIZE = 100
 async def list_kbs(
     db: AsyncSession, page: int = 1, page_size: int = 20
 ) -> tuple[list[KnowledgeBase], int]:
-    """分页返回知识库列表 + 总数；按 created_at 倒序。"""
+    """分页返回知识库列表 + 总数；按 created_at 倒序。
+
+    P1-9：默认隐藏 deleting / pending_cleanup 状态的 KB（用户视角已删除）。
+    详情接口 get_kb_or_raise 仍能查到 pending_cleanup 行（便于运维诊断）。
+    """
     page = max(page, 1)
     page_size = max(min(page_size, MAX_PAGE_SIZE), 1)
 
+    # P1-9：过滤掉"逻辑已删但外存清理中/失败"的 KB
+    visible_filter = KnowledgeBase.status.notin_(
+        [KB_STATUS_DELETING, KB_STATUS_PENDING_CLEANUP]
+    )
+
     total = (
-        await db.execute(select(func.count()).select_from(KnowledgeBase))
+        await db.execute(
+            select(func.count()).select_from(KnowledgeBase).where(visible_filter)
+        )
     ).scalar_one()
 
     items_stmt = (
         select(KnowledgeBase)
+        .where(visible_filter)
         .order_by(desc(KnowledgeBase.created_at), desc(KnowledgeBase.id))
         .offset((page - 1) * page_size)
         .limit(page_size)
@@ -247,60 +263,103 @@ async def update_kb(
 
 
 async def delete_kb(db: AsyncSession, kb_id: uuid.UUID) -> None:
-    """完全清理知识库的所有资源（KB-05）。
+    """完全清理知识库的所有资源（KB-05 + V2 hardening P1-9）。
 
-    严格按 PRD §3.2 KB-05 顺序：
-    1. **revoke 所有进行中的入库任务**（S3.2 追加）：防止 worker 在 KB 被删后
-       继续写已经不存在的 collection
-    2. Milvus drop_collection（不可逆，最先做；失败 → 整体回滚返 500）
-    3. Neo4j MATCH (n {kb_id}) DETACH DELETE n（删整个 kb 子图，包含 Document 和孤儿 Entity）
-    4. PG 删 knowledge_bases 记录（外键级联删 kb_files；失败 → Milvus 已丢，
-       记日志告警，仍向上抛 500）
-    5. **磁盘清理**（S3.2 追加）：清空 {UPLOAD_DIR}/{kb_id}/ 整个目录树
+    P1-9 改造：把"Milvus 失败 → 整体回滚返 500"改成"失败降级为补偿"：
+
+      1) revoke 所有进行中任务
+      2) PG 状态改 deleting + commit
+      3) 同步清外存：Milvus drop_collection + Neo4j DETACH DELETE
+      4) 全 OK → PG 真删 + 磁盘清理
+         任一失败 → status 改 pending_cleanup + commit（用户视角接口仍返 200）
+
+    与 P1-9 之前的差异：
+    - 不再向用户抛 500（Milvus 暂时不可用不是用户该关心的中断）
+    - 外存清理失败时保留 PG 行，让 cleanup_reaper_task 后台兜底
+    - PG 删除失败仍抛 500（这是真异常，不可能被补偿）
     """
     kb = await get_kb_or_raise(db, kb_id)
 
     # ---- 1) revoke 所有进行中的 Celery 任务 ----
-    # 提前查 processing 状态的 file 行，避免外键级联删后查不到 celery_task_id
     await _revoke_kb_processing_tasks(db, kb_id)
 
-    # ---- 2) Milvus drop（PRD 要求最先的实际数据操作，不可逆）----
+    # ---- 2) PG 标 deleting + commit ----
+    kb.status = KB_STATUS_DELETING
     try:
-        drop_kb_collection(kb_id)
-    except RuntimeError as e:
-        logger.error("KB-05 Milvus drop 失败 kb_id=%s: %s", kb_id, e)
-        raise BusinessError(
-            error_codes.INTERNAL_ERROR,
-            f"删除知识库底层向量资源失败：{e}",
-        ) from e
-
-    # ---- 3) Neo4j 清理 ----
-    # 注意：这里删的是"该 KB 的整个子图"，比 FILE-04 的"单文件清理"粒度更粗
-    # 已经把 KB 当作整体抛弃，可以放心 DETACH DELETE 所有带 kb_id 标签的节点
-    await _cleanup_kb_neo4j(kb_id)
-
-    # ---- 4) PG delete（外键 ondelete=CASCADE 自动级联删 kb_files）----
-    try:
-        await db.delete(kb)
         await db.commit()
     except Exception as e:
         await db.rollback()
-        # Milvus 已删但 PG 删除失败 —— 数据不一致，告警让人工介入
-        logger.error(
-            "KB-05 PG 删除失败 kb_id=%s（Milvus Collection 已 drop，数据不一致）: %s",
-            kb_id,
-            e,
-        )
         raise BusinessError(
-            error_codes.INTERNAL_ERROR,
-            f"知识库元数据删除失败（向量库已清理，请人工介入）：{e}",
+            error_codes.INTERNAL_ERROR, f"知识库状态切换失败：{e}"
         ) from e
 
-    # ---- 5) 磁盘清理（S3.2 追加）----
-    # 即使前面步骤都成功，磁盘清理失败也只 warning，不影响业务（孤儿文件可由运维定期清）
-    _cleanup_kb_upload_dir(kb_id)
+    # ---- 3) 同步清外存 ----
+    milvus_ok = _safe_drop_kb_collection(kb_id)
+    neo4j_ok = await _cleanup_kb_neo4j(kb_id)
 
-    logger.info("KB-05 知识库删除完成 kb_id=%s", kb_id)
+    # ---- 4) 分支：全成功 → PG 真删；任一失败 → 改 pending_cleanup ----
+    if milvus_ok and neo4j_ok:
+        try:
+            await db.delete(kb)
+            await db.commit()
+        except Exception as e:
+            await db.rollback()
+            logger.error(
+                "KB-05 PG 删除失败 kb_id=%s（Milvus/Neo4j 已清理，数据不一致）: %s",
+                kb_id,
+                e,
+            )
+            raise BusinessError(
+                error_codes.INTERNAL_ERROR,
+                f"知识库元数据删除失败（向量/图谱已清理，请人工介入）：{e}",
+            ) from e
+
+        _cleanup_kb_upload_dir(kb_id)
+        logger.info("KB-05 知识库删除完成 kb_id=%s", kb_id)
+    else:
+        # 外存清理失败 → 留行让 reaper 接手
+        from app.services.kb_file_service import _format_cleanup_failure_reason
+
+        reason = _format_cleanup_failure_reason(
+            milvus_ok=milvus_ok, neo4j_ok=neo4j_ok
+        )
+        await db.execute(
+            update(KnowledgeBase)
+            .where(KnowledgeBase.id == kb_id)
+            .values(
+                status=KB_STATUS_PENDING_CLEANUP,
+                description=(
+                    f"{kb.description or ''}\n"
+                    f"[P1-9] {reason}"
+                ),
+            )
+        )
+        try:
+            await db.commit()
+        except Exception as e:
+            await db.rollback()
+            raise BusinessError(
+                error_codes.INTERNAL_ERROR,
+                f"知识库状态切换 pending_cleanup 失败：{e}",
+            ) from e
+        logger.warning(
+            "KB-05 知识库外存清理失败已转 pending_cleanup kb_id=%s reason=%s",
+            kb_id,
+            reason,
+        )
+
+
+def _safe_drop_kb_collection(kb_id: uuid.UUID) -> bool:
+    """P1-9 包装 drop_kb_collection 为 bool 返回。
+
+    不抛异常，失败时返回 False 让调用方决策补偿路径。
+    """
+    try:
+        drop_kb_collection(kb_id)
+        return True
+    except RuntimeError as e:
+        logger.warning("KB-05 Milvus drop 失败 kb_id=%s: %s", kb_id, e)
+        return False
 
 
 async def _revoke_kb_processing_tasks(
@@ -347,25 +406,28 @@ async def _revoke_kb_processing_tasks(
         logger.warning("KB-05 Celery 不可用，跳过任务 revoke kb_id=%s", kb_id)
 
 
-async def _cleanup_kb_neo4j(kb_id: uuid.UUID) -> None:
+async def _cleanup_kb_neo4j(kb_id: uuid.UUID) -> bool:
     """KB-05 第 3 步：删除该 KB 在 Neo4j 中的所有节点和关系。
 
     粒度：DETACH DELETE 所有 (n {kb_id: $kb_id})；
     一并删 Document 和所有"只属于这个 KB"的 Entity。
-    失败仅记 warning，不阻断业务（孤儿节点不影响其它 KB 检索）。
+
+    P1-9 改造：返 bool，True = 成功或可跳过，False = 真失败需要补偿
+    （驱动不可用 / 未初始化属于"无外存可清理"的预期场景，返 True；
+     真正连上 Neo4j 但 Cypher 执行炸了才返 False）
     """
     try:
         from app.core.config import get_settings
         from app.kg.neo4j_client import get_neo4j_driver
     except ImportError as e:
         logger.warning("KB-05 Neo4j 驱动不可用，跳过图谱清理: %s", e)
-        return
+        return True
 
     try:
         driver = get_neo4j_driver()
     except RuntimeError as e:
         logger.warning("KB-05 Neo4j 未初始化，跳过图谱清理 kb_id=%s: %s", kb_id, e)
-        return
+        return True
 
     settings = get_settings()
     cypher = "MATCH (n {kb_id: $kb_id}) DETACH DELETE n"
@@ -373,8 +435,10 @@ async def _cleanup_kb_neo4j(kb_id: uuid.UUID) -> None:
         async with driver.session(database=settings.neo4j_database) as sess:
             await sess.run(cypher, kb_id=str(kb_id))
         logger.info("KB-05 Neo4j 子图已清理 kb_id=%s", kb_id)
+        return True
     except Exception as e:  # noqa: BLE001
         logger.warning("KB-05 Neo4j 子图清理失败 kb_id=%s err=%s", kb_id, e)
+        return False
 
 
 def _cleanup_kb_upload_dir(kb_id: uuid.UUID) -> None:

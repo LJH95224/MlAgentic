@@ -89,31 +89,40 @@ def test_chat_request_kb_ids_rejects_invalid_uuid():
 def mock_embed(monkeypatch):
     fake_vec = [0.0] * 4096
     mock = AsyncMock(return_value=[fake_vec])
-    monkeypatch.setattr("app.rag.retriever.aembed_texts", mock)
+    # 历史迁移：retriever 自身不再 import aembed_texts（现在走 hybrid_search 委托）
+    # 参见 app/rag/retriever.py 第 86~89 行：search_knowledge_base 直接 import
+    # hybrid_search，而 hybrid_search 在 app/rag/hybrid_retriever.py:26 import aembed_texts
+    monkeypatch.setattr("app.rag.hybrid_retriever.aembed_texts", mock)
     return mock
 
 
 @pytest.fixture
 def mock_client_v2(monkeypatch):
-    """mock get_milvus_client；记录所有 search 调用的 collection_name。"""
+    """mock get_milvus_client；记录所有 search/hybrid_search 调用的 collection_name。
+
+    注：V2 混合检索路径取决于 settings.bm25_enable：
+    - True（默认）→ client.hybrid_search()
+    - False → client.search()
+    两种都要 mock，确保测试与 BM25 默认配置无关。
+    """
     client = MagicMock()
     client.has_collection = MagicMock(return_value=True)
-    client.search = MagicMock(
-        return_value=[
-            [
-                {
-                    "distance": 0.9,
-                    "entity": {
-                        "document_id": "doc-x",
-                        "content": "片段",
-                        "entity_tags": [],
-                        "metadata": {},
-                    },
-                }
-            ]
+    _base_return = [
+        [
+            {
+                "distance": 0.9,
+                "entity": {
+                    "document_id": "doc-x",
+                    "content": "片段",
+                    "entity_tags": [],
+                    "metadata": {},
+                },
+            }
         ]
-    )
-    monkeypatch.setattr("app.rag.retriever.get_milvus_client", lambda: client)
+    ]
+    client.search = MagicMock(return_value=_base_return)
+    client.hybrid_search = MagicMock(return_value=_base_return)
+    monkeypatch.setattr("app.rag.hybrid_retriever.get_milvus_client", lambda: client)
     return client
 
 
@@ -140,8 +149,8 @@ async def test_search_with_kb_ids_none_uses_default_collection(
     await _do_search("q", 5, None, None, None)
 
     # 应该只调一次 search，collection 是默认值
-    assert mock_client_v2.search.call_count == 1
-    assert mock_client_v2.search.call_args.kwargs["collection_name"] == "knowledge_chunks"
+    assert mock_client_v2.hybrid_search.call_count == 1
+    assert mock_client_v2.hybrid_search.call_args.kwargs["collection_name"] == "knowledge_chunks"
 
 
 async def test_search_with_empty_kb_ids_skips_milvus(
@@ -154,7 +163,7 @@ async def test_search_with_empty_kb_ids_skips_milvus(
 
     result = await _do_search("q", 5, None, None, None)
     assert "未指定知识库" in result
-    mock_client_v2.search.assert_not_called()
+    mock_client_v2.hybrid_search.assert_not_called()
     # embedding 也应该没被调（连向量化都跳过）
     mock_embed.assert_not_called()
 
@@ -173,9 +182,9 @@ async def test_search_with_kb_ids_uses_multiple_collections(
 
     await _do_search("q", 5, None, None, None)
 
-    assert mock_client_v2.search.call_count == 2
+    assert mock_client_v2.hybrid_search.call_count == 2
     called_collections = [
-        c.kwargs["collection_name"] for c in mock_client_v2.search.call_args_list
+        c.kwargs["collection_name"] for c in mock_client_v2.hybrid_search.call_args_list
     ]
     assert build_kb_collection_name(kb_a) in called_collections
     assert build_kb_collection_name(kb_b) in called_collections
@@ -204,9 +213,9 @@ async def test_search_skips_missing_collection(
     await _do_search("q", 5, None, None, None)
 
     # 只调一次 search（kb_b 那一次）
-    assert mock_client_v2.search.call_count == 1
+    assert mock_client_v2.hybrid_search.call_count == 1
     assert (
-        mock_client_v2.search.call_args.kwargs["collection_name"]
+        mock_client_v2.hybrid_search.call_args.kwargs["collection_name"]
         == build_kb_collection_name(kb_b)
     )
 
@@ -242,6 +251,10 @@ async def test_search_per_collection_failure_does_not_break_others(
             ]
         ]
 
+    mock_client_v2.hybrid_search = MagicMock(side_effect=_search)
+    # 同步给 fallback 路径上同样的语义——hybrid_retriever 在 hybrid_search
+    # 抛错时会降级调用 client.search()；如果 fallback 默认返回成功结果，
+    # 就把"kb_a 失败"伪装成"kb_a 成功"，破坏断言意图
     mock_client_v2.search = MagicMock(side_effect=_search)
 
     from app.rag.retriever import _do_search
@@ -293,7 +306,7 @@ async def test_search_merges_and_resorts_across_collections(
             ]
         ]
 
-    mock_client_v2.search = MagicMock(side_effect=_search)
+    mock_client_v2.hybrid_search = MagicMock(side_effect=_search)
 
     from app.rag.retriever import _do_search
 

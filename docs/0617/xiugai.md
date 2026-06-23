@@ -93,44 +93,156 @@
 
 ---
 
-## 二、下迭代 / 长期质量项
+## 二、Batch 1 已完成（fix/v2-quality-batch1 第二轮，2026-06-22）
 
-- [ ] A P1-8：`retriever.py` 检索失败不应吞异常，应符合 AGT-04 错误反思契约。
-- [ ] A P1-9：删除 KB File 时 Milvus / Neo4j 清理增加重试与补偿队列。
-- [ ] A P1-11：增加卡死 `processing` 文件的超时回收任务。
-- [ ] A P2-12：处理 `ingest_task_v1.py` 死代码（删除或归档）。
-- [ ] A P2-13：V2 `hybrid_retriever.py` 解耦对 V1 retriever 私有函数的跨模块依赖。
-- [ ] A P2-15：补齐重点模块纯单测。
-- [ ] A P2-16~18：长函数拆分、命名统一、魔法数字配置化。
-- [ ] A P2-19：静默吞异常处补日志或降级标志。
-- [ ] B M-01：引入 Alembic 迁移体系。
-- [ ] B M-04：Trace 写入异步化。
-- [ ] B M-06：V2 filter 增加 `kb_id` 兜底过滤。
-- [ ] B M-07：Agent 工具 `top_k` clamp（当前代码已具备，待测试覆盖）。
-- [ ] B M-11：`bm25_contributed` 统计避免虚假置真。
-- [ ] B L-01~L-07：低优先级风格与性能清理。
+本会话沿用 `fix/v2-quality-batch1` 分支，把 B 报告 M 级中影响最大的 4 项补完：
+
+- [x] **B M-11**：`bm25_contributed` 改为基于 retrieve step_output 真实判定。
+  - 文件：[../../app/observability/analytics_writer.py](../../app/observability/analytics_writer.py)、[../../app/api/v2/endpoints/query.py](../../app/api/v2/endpoints/query.py)、[../../app/api/v2/endpoints/retrieve.py](../../app/api/v2/endpoints/retrieve.py)
+  - 口径：retrieve step `bm25_enabled=True` 且 `hit_count>0` 才算贡献。`bm25_enable=False` 或检索 0 命中均不算。
+  - 测试：[../../tests/test_v2_t12.py](../../tests/test_v2_t12.py) 新增 3 个口径专项 case。
+
+- [x] **A P1-8**：`hybrid_search` 全 collection 失败时冒泡 `RuntimeError`，对齐 AGT-04 错误反思链路。
+  - 文件：[../../app/rag/hybrid_retriever.py](../../app/rag/hybrid_retriever.py)
+  - 单 collection 失败直接抛；多 collection 部分失败保留幸存者；全部失败抛出（带原始异常链）。降级 hybrid→dense 保留（产品决策）。
+  - 测试：[../../tests/test_v2_t2.py](../../tests/test_v2_t2.py) 新增 2 case。
+
+- [x] **A P2-13**：抽 [../../app/rag/filters.py](../../app/rag/filters.py) 模块，`hybrid_retriever` 不再 `from app.rag.retriever import _build_filter_expr, get_current_role`。
+  - retriever 通过 re-export 保持对外契约不变，所有 `monkeypatch` 路径仍有效。
+
+- [x] **A P1-11**：卡死 `processing` 文件回收周期任务。
+  - 文件：[../../app/models/kb_file.py](../../app/models/kb_file.py)（新增 `updated_at` 字段）、[../../app/tasks/reaper_task.py](../../app/tasks/reaper_task.py)（新建）、[../../app/tasks/celery_app.py](../../app/tasks/celery_app.py)（beat_schedule）、[../../app/core/config.py](../../app/core/config.py)（3 个新配置）
+  - 默认每 10 分钟扫一次，阈值 35min（= Celery hard timeout 30min + 5min 缓冲）。复用 `_mark_failed_safe` 走标准失败补偿。
+  - 测试：[../../tests/test_reaper_task.py](../../tests/test_reaper_task.py) 14 个 case 全过。
+  - **部署注意**：已有 PG 需手动 `ALTER TABLE kb_files ADD COLUMN updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(); CREATE INDEX ix_kb_files_updated_at ON kb_files (updated_at);` —— 此后 B M-01 已引入 Alembic（详见下方），新部署走 `alembic upgrade head` 即可，本痛点已消除。
 
 ---
 
-## 三、当前批次验收建议
+## 三、Batch 2 已完成（2026-06-22）
 
-已完成语法级验证：
+> 目标：把 B 报告 / A 报告剩余 P1/M 级项消化掉，让运维 & 数据一致性达到生产可上线水平。预计半天到一天。
+>
+> **6 项全部完成**：B M-01 Alembic / A P1-9 KB 删除补偿 / B M-06 kb_id 兜底 / B M-04 Trace 异步 / A P2-12 删死代码 / B M-07 top_k 边界。全量 `pytest tests/` 850 passed / 41 skipped / 0 failed。
 
-```bash
-python -m compileall app/core/async_utils.py app/tasks/ingest_task.py app/ingest/dual_layer.py app/ingest/table_description.py app/rag/query_ner.py app/api/v2/endpoints/query.py app/tasks/session_task.py app/kg/ner.py app/llm/client.py app/rag/milvus_client.py tests/test_async_utils.py tests/test_ingest_task.py tests/test_rag_retriever.py tests/test_v2_p1.py tests/test_v2_t3.py tests/test_v2_t0.py
-```
+按"对产品的影响 × 工作量"排序：
 
-用户手动执行：
+### 🔴 影响运维 / 数据一致性
+
+- [x] **B M-01：引入 Alembic 迁移体系**（已完成 2026-06-22）
+  - 痛点：本会话给 `kb_files` 加 `updated_at` 需手动 `ALTER TABLE`，下次还会遇到。项目早期一次性引入成本最低。
+  - 步骤：`alembic init` → 配 `env.py` 接 `Base.metadata` + `DATABASE_URL` → `alembic revision --autogenerate -m "baseline"` 生成对应当前所有模型的迁移 → `alembic stamp head`（已部署的环境直接 stamp，不实跑） → 补一个 P1-11 的 `updated_at` 增量迁移作为示范。
+  - 修改：新增 `alembic/`、修改 [../../app/main.py](../../app/main.py) `_create_all_with_retry` 注释（保留兼容，新部署仍可用）、补 `Makefile` 或 README 一条 `alembic upgrade head` 指令。
+  - 预估：2~3 小时。
+  - **实际交付**：
+    - 新增 [../../alembic.ini](../../alembic.ini)（`sqlalchemy.url` 故意留空，env.py 注入）
+    - 新增 [../../alembic/env.py](../../alembic/env.py)（async 版本，`async_engine_from_config` + `connection.run_sync`；从 `app.core.config.get_settings().database_url` 拿 URL；`compare_type=True` + `compare_server_default=True`；NullPool；asyncpg 关 SSL 兼容 Windows）
+    - 新增 [../../alembic/script.py.mako](../../alembic/script.py.mako)（迁移脚本模板，中文 docstring）
+    - 新增 [../../alembic/versions/.gitkeep](../../alembic/versions/.gitkeep)（空目录占位）
+    - [../../requirements.txt](../../requirements.txt) 数据库段加 `alembic>=1.13.0`
+    - [../../app/main.py](../../app/main.py) `_build_v2_compat_alter_sql` / `_create_all_with_retry` 注释更新（明确"开发态兜底，新部署走 alembic upgrade head"）
+    - [../../README.md](../../README.md) 新增 §2.5「数据库迁移（Alembic）」段，含新部署 / 旧库 stamp / 新增迁移三种姿势
+  - **偏离说明**：原计划"补一个 P1-11 `updated_at` 增量迁移作示范"取消——P1-11 的 `updated_at` 字段在本会话已合并进 [../../app/models/kb_file.py](../../app/models/kb_file.py)，autogenerate baseline 会一并捕获，没法再单独"补"一个增量。增量迁移的"示范"等下一次真正改 schema 时（如 B M-06 / A P1-9）自然演示。
+  - **附带修复**：B M-01 验收回归时发现 [../../tests/test_kb06_chat_scope.py](../../tests/test_kb06_chat_scope.py) 6 个 case 全部 ERROR——monkeypatch 路径 `app.rag.retriever.aembed_texts` 已失效（retriever 在 P2-13 后委托给 hybrid_search，不再 import aembed_texts）。改为 `app.rag.hybrid_retriever.aembed_texts` 修复，6 case 恢复 GREEN。
+  - **用户验收步骤**（CLAUDE.md 约定依赖安装与运行类命令归用户）：
+    ```bash
+    conda activate geo_agent
+    uv pip install alembic -i https://pypi.tuna.tsinghua.edu.cn/simple
+    # 1. 干净库上生成 baseline（或对现有库 stamp head）
+    alembic revision --autogenerate -m "baseline_v2"
+    # 2. 人工检查 alembic/versions/<timestamp>_baseline_v2.py
+    #    应包含 7 张表（chat_sessions/chat_messages/knowledge_bases/kb_files/
+    #    agent_traces/eval_tasks/query_analytics）+ V2.0 字段 + 索引 + CheckConstraint
+    # 3. 双向校验
+    alembic upgrade head
+    alembic downgrade base
+    alembic upgrade head
+    # 4. 旧库姿势
+    alembic stamp head && alembic current   # 输出 head revision id
+    # 5. 回归
+    pytest tests/ -v --tb=short
+    ```
+
+- [x] **A P1-9：删除 KB / KB File 时 Milvus / Neo4j 清理增加重试与补偿队列**（已完成 2026-06-22）
+  - 现状未确认，需先看 [../../app/services/kb_file_service.py](../../app/services/kb_file_service.py) 与 KB 删除接口。类似 P1-11 的回收任务模式：删除时主路径同步清；失败 / 部分失败时写入"待补偿"标记，由周期任务捞起来重试。
+  - 可复用 `reaper_task` 的 Celery beat 框架。
+  - 预估：1~2 小时。
+  - **实际交付**：
+    - **数据模型**：[../../app/models/kb_file.py](../../app/models/kb_file.py) / [../../app/models/knowledge_base.py](../../app/models/knowledge_base.py) 各加 `deleting` / `pending_cleanup` 两个状态值 + `cleanup_retry_count` 字段；KB 表补 `updated_at`（带 index + onupdate，reaper 扫描排序用）。
+    - **主路径改造**（"失败降级为补偿"语义）：[../../app/services/kb_service.py](../../app/services/kb_service.py) `delete_kb` 与 [../../app/services/kb_file_service.py](../../app/services/kb_file_service.py) `delete_file` 改为四阶段——revoke → 标 deleting(commit) → 同步清外存(Milvus/Neo4j 各返 bool) → 全成功真删 / 任一失败改 pending_cleanup。DELETE 端点对用户始终返 200，不再因外存抖动抛 500。
+    - **`_cleanup_*` 函数改返 bool**：`_cleanup_milvus_chunks_for_file` / `_cleanup_neo4j_entities_for_file` / `_cleanup_kb_neo4j` / 新增 `_safe_drop_kb_collection`，外存真失败返 False 让调用方决策补偿。
+    - **listing 过滤**：`list_kbs` / `list_files` 默认隐藏 `deleting` / `pending_cleanup`（用户视角已删）；详情接口仍可查到 pending_cleanup 行便于运维诊断。
+    - **补偿 reaper**：新增 [../../app/tasks/cleanup_reaper_task.py](../../app/tasks/cleanup_reaper_task.py)，复用 reaper_task 骨架扫 `pending_cleanup` 行重试外存清理，成功真删 / 失败 `cleanup_retry_count += 1`，超 `CLEANUP_REAPER_MAX_RETRY` 仅告警。注册到 [../../app/tasks/celery_app.py](../../app/tasks/celery_app.py) beat_schedule（`reap-pending-cleanup`，默认 5min 一轮）。
+    - **配置**：[../../app/core/config.py](../../app/core/config.py) 加 `cleanup_reaper_interval_s` / `cleanup_reaper_max_retry` / `cleanup_reaper_enable`；[../../.env.example](../../.env.example) 同步注释。
+    - **测试**：新增 [../../tests/test_kb_compensation.py](../../tests/test_kb_compensation.py)（23 case：模型字段 / Celery 注册 / delete_file & delete_kb 三分支 / reaper 扫描 / B M-06 过滤表达式）；同步更新 [../../tests/test_kb_service.py](../../tests/test_kb_service.py) / [../../tests/test_s3_cleanup.py](../../tests/test_s3_cleanup.py) / [../../tests/test_v1_5_models.py](../../tests/test_v1_5_models.py) 反映 P1-9 新契约（旧"Milvus 失败抛 500"断言改为"降级 pending_cleanup"）。全量回归 848 passed / 41 skipped / 0 failed。
+  - **B M-01 增量迁移示范**：本次模型变更需 `alembic revision --autogenerate -m "p1_9_kb_deletion_compensation_status"` 生成增量迁移（加 `cleanup_retry_count` × 2 + KB `updated_at` + index），正好补上 B M-01 缺失的"增量迁移示范"。
+
+- [x] **B M-06：V2 filter 增加 `kb_id` 兜底过滤**（已完成 2026-06-22）
+  - 安全相关：当前依赖 `get_current_kb_ids()` contextvar，配置不当时 Milvus 标量过滤可能跨 KB 召回。在 `_build_filter_expr` 加 `kb_id IN [...]` 兜底，与 contextvar 双保险。
+  - 文件：[../../app/rag/filters.py](../../app/rag/filters.py)、[../../app/rag/hybrid_retriever.py](../../app/rag/hybrid_retriever.py)。
+  - 预估：30 分钟。
+  - **实际交付**：[../../app/rag/filters.py](../../app/rag/filters.py) `_build_filter_expr` 加 `kb_ids: list[str] | None = None` 参数（默认 None 保持向后兼容），注入 `kb_id IN [...]` 子句；[../../app/rag/hybrid_retriever.py](../../app/rag/hybrid_retriever.py) 调用时把 contextvar `current_kb_ids` 序列化传入。None / 空 = 全局 collection 不加该子句（V1.0 默认行为不变）。测试在 [../../tests/test_kb_compensation.py](../../tests/test_kb_compensation.py) Part 7（4 case：不传 / 传 / 共存 / 转义安全）。
+
+### 🟡 可观测性 / 性能
+
+- [x] **B M-04：Trace 写入异步化**（已完成 2026-06-22）
+  - 现状：`Tracer.__aexit__` 同步 `await _flush_to_db()`，每次 `/v2/query` 末尾都等 PG 写完。高 QPS 时是瓶颈。
+  - 改造：`asyncio.create_task(...)` fire-and-forget；任务异常仅 warning。
+  - 文件：[../../app/observability/tracer.py](../../app/observability/tracer.py)。
+  - 预估：30 分钟。
+  - **实际交付**：[../../app/observability/tracer.py](../../app/observability/tracer.py) `__aexit__` 改为 `asyncio.create_task(self._flush_to_db())` + `_trace_flush_done` 回调（捕获 task.exception() 仅 warning，不冒泡）；边角降级 `RuntimeError`（无 running loop）时退回同步 await。测试 [../../tests/test_v2_t3.py](../../tests/test_v2_t3.py) 新增 `test_tracer_exit_schedules_flush_as_task`：spy create_task 调用 + mock_flush.assert_awaited_once() 双重证据链。
+
+### 🟢 清理 + 测试覆盖
+
+- [x] **A P2-12：删除 [../../app/tasks/ingest_task_v1.py](../../app/tasks/ingest_task_v1.py) 死代码**（已完成 2026-06-22）
+  - V2 已完全替换 V1，文件只是历史归档。删之前 `grep -r "ingest_task_v1" app/ tests/` 确认无 import。
+  - 预估：15 分钟。
+  - **实际交付**：删除 `app/tasks/ingest_task_v1.py`（git rm），[../../app/tasks/ingest_task.py](../../app/tasks/ingest_task.py) module docstring 第 3 行注释从"V1.5 七步管道已归档为 ingest_task_v1.py"改为"V2.0 全面替换 V1.5 七步管道（A P2-12 已删除归档文件）"。
+
+- [x] **B M-07：Agent 工具 `top_k` clamp 补测试**（已完成 2026-06-22）
+  - 代码已具备 clamp 逻辑（[../../app/rag/retriever.py](../../app/rag/retriever.py)），只缺单测。
+  - 预估：15 分钟。
+  - **实际交付**：审查时发现 `test_do_search_clamps_top_k` 已覆盖越界（999/0），但缺合法边界。新增 [../../tests/test_rag_retriever.py](../../tests/test_rag_retriever.py) `test_do_search_top_k_boundary_values_preserved` 覆盖 4 个边界：top_k=1（最小合法）/ top_k=50（最大合法）/ top_k=-3（负数走 fallback）/ top_k=51（刚越界 clamp 到 50）。
+
+---
+
+## 四、Batch 3 / 长期质量项
+
+- [ ] **A P2-19：静默吞异常处补日志或降级标志**
+  - 散落多处，需要全仓 grep `except Exception:` 后逐处决策（抛 / 降级 / 软失败标志）。
+  - 预估：1.5 小时。
+
+- [ ] **A P2-15：补齐重点模块纯单测**
+  - 范围模糊，建议先列出"重点模块"清单（Agent runner / hybrid_retriever / KG writer / Citation parser 等）再分批。
+  - 预估：未定，按模块拆。
+
+- [ ] **A P2-16/17/18：长函数拆分 / 命名统一 / 魔法数字配置化**
+  - 纯打磨。建议只挑最影响阅读的几处做（如 `_main` in ingest_task.py），剩下跳过。
+  - 预估：按需。
+
+- [ ] **B L-01~L-07：低优先级风格与性能清理**
+  - 性价比低，最后再说。
+
+### 独立迭代（非 hardening）
+
+- [ ] **A.2 Qwen3-Reranker-8B 重评估**
+  - Memory [a2-reranker-eval-pending-corpus-scale.md](../../../.claude/memory/a2-reranker-eval-pending-corpus-scale.md) 已记：A.1 在 ~150 chunks 上"Qwen3 弊大于利"是样本量噪音，等扩到 500+ chunks 再评。
+  - 阻塞依赖：先扩文档库（用户业务侧动作）。
+
+---
+
+## 五、各 Batch 的验收建议
+
+每个 Batch 结束都跑一次：
 
 ```bash
 conda activate geo_agent
-pytest tests/test_async_utils.py tests/test_ingest_task.py tests/test_rag_retriever.py tests/test_v2_p1.py tests/test_v2_t3.py tests/test_v2_t0.py
+# 全量回归（约 1~2 min）
+pytest tests/ -v --tb=short
+
+# 端到端 smoke（需要 docker-compose 起 PG/Redis/Milvus/Neo4j）
+pytest tests/smoke/ -v
 ```
 
-建议再追加 V2 相关回归：
+**Batch 2 已收尾（2026-06-22）** —— 第三段 6 项全部 ✅，xiugai.md 主线项目压完。剩余仅 Batch 3 长期跟踪项（A P2-19 静默吞异常 / A P2-15 重点模块单测 / A P2-16~18 风格打磨 / B L-01~07 低优清理），不必赶。
 
-```bash
-pytest tests/test_v2_t2.py tests/test_v2_t7.py tests/test_v2_t8.py tests/test_v2_t9.py
-```
-
-端到端 smoke、uvicorn、celery worker、docker compose 仍由用户手动执行，Claude 只给命令并根据输出继续修复。
+每完成一项**同步更新本文件勾选状态**，每个 Batch 收尾**同步更新 [../progress.md](../progress.md)**。

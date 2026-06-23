@@ -27,8 +27,10 @@ from app.ingest.parser import (
     is_supported_filename,
 )
 from app.models.kb_file import (
+    FILE_STATUS_DELETING,
     FILE_STATUS_FAILED,
     FILE_STATUS_PENDING,
+    FILE_STATUS_PENDING_CLEANUP,
     FILE_STATUS_PROCESSING,
     KbFile,
 )
@@ -253,22 +255,31 @@ async def list_kb_files(
     """分页返回 KB 下的文件列表 + 总数；按 created_at 倒序。
 
     会先校验 KB 存在（FILE-02 验收：KB 不存在 → 404）。
+
+    P1-9：默认隐藏 deleting / pending_cleanup 状态的文件（用户视角已删除）。
     """
     await get_kb_or_raise(db, kb_id)
     page = max(page, 1)
     page_size = max(min(page_size, MAX_PAGE_SIZE), 1)
+
+    # P1-9：过滤掉"逻辑已删但外存清理中/失败"的文件
+    visible_filter = KbFile.status.notin_(
+        [FILE_STATUS_DELETING, FILE_STATUS_PENDING_CLEANUP]
+    )
 
     total = (
         await db.execute(
             select(func.count())
             .select_from(KbFile)
             .where(KbFile.kb_id == kb_id)
+            .where(visible_filter)
         )
     ).scalar_one()
 
     items_stmt = (
         select(KbFile)
         .where(KbFile.kb_id == kb_id)
+        .where(visible_filter)
         .order_by(desc(KbFile.created_at), desc(KbFile.id))
         .offset((page - 1) * page_size)
         .limit(page_size)
@@ -318,27 +329,29 @@ def _safe_remove_disk(file_path: str) -> None:
 
 async def _cleanup_milvus_chunks_for_file(
     kb_id: uuid.UUID, file_id: uuid.UUID
-) -> None:
+) -> bool:
     """删除 Milvus 中该文件的所有切片（按 document_id == file_id 过滤）。
 
-    走全局 Milvus client（init_milvus 已在 FastAPI lifespan 初始化）。
-    Collection 不存在或 delete 失败仅记 warning，不阻断主清理流程
-    （目标是把能删的尽量删干净）。
+    P1-9 改造：函数改为返 bool，让调用方（delete_file）在返回后能靠 True/False
+    决定是"真删 PG"还是"改 pending_cleanup 让 reaper 补偿"，不再吞异常。
+
+    Returns:
+        True — 清理成功或已跳过（collection 不存在等预期情况）
+        False — 清理失败（Milvus 不可用 / delete 抛异常），调用方应改 pending_cleanup
     """
     try:
         from app.rag.milvus_client import get_milvus_client
         from app.rag.naming import build_kb_collection_name
     except ImportError as e:
         logger.error("Milvus 客户端不可用，跳过切片清理: %s", e)
-        return
+        return True
 
     collection = build_kb_collection_name(kb_id)
     try:
         client = get_milvus_client()
     except RuntimeError as e:
-        # init_milvus 未跑过（脚本场景）；记日志放行
         logger.warning("Milvus 未初始化，跳过切片清理 kb_id=%s: %s", kb_id, e)
-        return
+        return True
 
     if not client.has_collection(collection):
         logger.info(
@@ -346,10 +359,9 @@ async def _cleanup_milvus_chunks_for_file(
             collection,
             file_id,
         )
-        return
+        return True
 
     try:
-        # filter 表达式按 document_id 精确匹配；与 ingest_task 写入时的字段对齐
         client.delete(
             collection_name=collection,
             filter=f'document_id == "{file_id}"',
@@ -357,6 +369,7 @@ async def _cleanup_milvus_chunks_for_file(
         logger.info(
             "Milvus 切片已清理 collection=%s file_id=%s", collection, file_id
         )
+        return True
     except Exception as e:  # noqa: BLE001
         logger.warning(
             "Milvus 切片清理失败 collection=%s file_id=%s err=%s",
@@ -364,37 +377,37 @@ async def _cleanup_milvus_chunks_for_file(
             file_id,
             e,
         )
+        return False
 
 
 async def _cleanup_neo4j_entities_for_file(
     kb_id: uuid.UUID, file_id: uuid.UUID
-) -> None:
+) -> bool:
     """删除 Neo4j 中该文件锚定的 Document + 它相关的 MENTIONED_IN 关系。
 
-    Entity 节点本身不删（同一实体可能被多个文档引用）；只删本 file 的关系和
-    Document 节点。Document 用 (document_id, kb_id) 二维匹配防误删。
+    P1-9 改造：改为返 bool，与 _cleanup_milvus_chunks_for_file 同款语义。
 
-    异常时仅记 warning，不阻断主清理流程。
+    Returns:
+        True — 清理成功或已跳过（Neo4j 不可用等预期情况）
+        False — 清理失败，调用方应改 pending_cleanup
     """
     try:
         from app.core.config import get_settings
         from app.kg.neo4j_client import get_neo4j_driver
     except ImportError as e:
         logger.error("Neo4j 驱动不可用，跳过实体清理: %s", e)
-        return
+        return True
 
     try:
         driver = get_neo4j_driver()
     except RuntimeError as e:
         logger.warning("Neo4j 未初始化，跳过实体清理 kb_id=%s: %s", kb_id, e)
-        return
+        return True
 
     settings = get_settings()
     document_id = str(file_id)
     kb_id_str = str(kb_id)
 
-    # 1) 删 Document 节点及其所有出入关系（DETACH DELETE）
-    # 2) 该 Document 关联的 Entity 节点不动（保持复用）
     delete_cypher = """
     MATCH (d:Document {document_id: $document_id, kb_id: $kb_id})
     DETACH DELETE d
@@ -412,6 +425,7 @@ async def _cleanup_neo4j_entities_for_file(
             kb_id,
             file_id,
         )
+        return True
     except Exception as e:  # noqa: BLE001
         logger.warning(
             "Neo4j 实体清理失败 kb_id=%s file_id=%s err=%s",
@@ -419,59 +433,117 @@ async def _cleanup_neo4j_entities_for_file(
             file_id,
             e,
         )
+        return False
 
 
 async def delete_file(
     db: AsyncSession, kb_id: uuid.UUID, file_id: uuid.UUID
 ) -> None:
-    """删除文件及相关资源（FILE-04）。
+    """删除文件及相关资源（FILE-04 + V2 hardening P1-9）。
 
-    顺序（PRD §3.3 FILE-04）：
-      1. 若 status=processing → revoke Celery 任务
-      2. Milvus 删切片（S3.2 接通）
-      3. Neo4j 删实体（S5 接通）
-      4. PG 删 kb_files + KB.file_count -=1 + chunk_count -= old_chunk_count
-      5. 磁盘删原始文件 + 空目录
+    P1-9 改造：把"一次性硬删，外存失败就吞掉"改成"失败降级为补偿"：
+
+      0) revoke processing 任务（既有逻辑）
+      1) PG 状态改 deleting + commit
+         - 让并发查询看到"正在删除"
+         - 让 reaper 区分"用户发起的清理"和别的状态
+      2) 同步清外存（Milvus → Neo4j），每步独立返 bool
+      3) 全部 OK → PG 真删 + 计数回滚 + 磁盘删
+         任一失败 → status 改 pending_cleanup + error_message 记原因 + commit
+         （用户视角接口仍返 200，后台 cleanup_reaper_task 接手重试）
+
+    PG / 磁盘失败仍走 BusinessError 抛 500（这是真异常，不属于"外存抖动"补偿场景）。
     """
     kb_file = await get_file_or_raise(db, kb_id, file_id)
 
-    # 1) revoke（仅 processing 状态需要）
+    # 0) revoke（仅 processing 状态需要）
     if kb_file.status == FILE_STATUS_PROCESSING:
         _safe_revoke_task(kb_file.celery_task_id)
 
-    # 2) Milvus / 3) Neo4j 清理（S3.2 / S5 stub）
-    await _cleanup_milvus_chunks_for_file(kb_id, file_id)
-    await _cleanup_neo4j_entities_for_file(kb_id, file_id)
-
-    # 4) PG：删 file 行 + KB 计数减回去
-    old_chunk_count = kb_file.chunk_count
-    file_path = kb_file.file_path
-
-    await db.delete(kb_file)
-    await db.execute(
-        update(KnowledgeBase)
-        .where(KnowledgeBase.id == kb_id)
-        .values(
-            file_count=KnowledgeBase.file_count - 1,
-            chunk_count=KnowledgeBase.chunk_count - old_chunk_count,
-        )
-    )
+    # 1) 标 deleting + commit
+    kb_file.status = FILE_STATUS_DELETING
     try:
         await db.commit()
     except Exception as e:
         await db.rollback()
         raise BusinessError(
-            error_codes.INTERNAL_ERROR, f"文件元数据删除失败：{e}"
+            error_codes.INTERNAL_ERROR, f"文件状态切换失败：{e}"
         ) from e
 
-    # 5) 磁盘
-    _safe_remove_disk(file_path)
+    # 2) 同步清外存，每步独立成功/失败
+    milvus_ok = await _cleanup_milvus_chunks_for_file(kb_id, file_id)
+    neo4j_ok = await _cleanup_neo4j_entities_for_file(kb_id, file_id)
 
-    logger.info(
-        "FILE-04 文件删除完成 kb_id=%s file_id=%s 释放切片=%d",
-        kb_id,
-        file_id,
-        old_chunk_count,
+    # 3) 分支：全成功 → PG 真删；任一失败 → 改 pending_cleanup
+    old_chunk_count = kb_file.chunk_count
+    file_path = kb_file.file_path
+
+    if milvus_ok and neo4j_ok:
+        await db.delete(kb_file)
+        await db.execute(
+            update(KnowledgeBase)
+            .where(KnowledgeBase.id == kb_id)
+            .values(
+                file_count=KnowledgeBase.file_count - 1,
+                chunk_count=KnowledgeBase.chunk_count - old_chunk_count,
+            )
+        )
+        try:
+            await db.commit()
+        except Exception as e:
+            await db.rollback()
+            raise BusinessError(
+                error_codes.INTERNAL_ERROR, f"文件元数据删除失败：{e}"
+            ) from e
+
+        # 磁盘清理（即使失败也不算业务失败，只 warning）
+        _safe_remove_disk(file_path)
+
+        logger.info(
+            "FILE-04 文件删除完成 kb_id=%s file_id=%s 释放切片=%d",
+            kb_id,
+            file_id,
+            old_chunk_count,
+        )
+    else:
+        # 外存清理失败 → 留行让 reaper 接手
+        reason = _format_cleanup_failure_reason(
+            milvus_ok=milvus_ok, neo4j_ok=neo4j_ok
+        )
+        await db.execute(
+            update(KbFile)
+            .where(KbFile.id == file_id)
+            .values(
+                status=FILE_STATUS_PENDING_CLEANUP,
+                error_message=reason[:2000],
+            )
+        )
+        try:
+            await db.commit()
+        except Exception as e:
+            await db.rollback()
+            raise BusinessError(
+                error_codes.INTERNAL_ERROR,
+                f"文件状态切换 pending_cleanup 失败：{e}",
+            ) from e
+        logger.warning(
+            "FILE-04 文件外存清理失败已转 pending_cleanup kb_id=%s file_id=%s reason=%s",
+            kb_id,
+            file_id,
+            reason,
+        )
+
+
+def _format_cleanup_failure_reason(*, milvus_ok: bool, neo4j_ok: bool) -> str:
+    """P1-9 把外存清理失败的位置打包成 error_message 文本。"""
+    failed = []
+    if not milvus_ok:
+        failed.append("Milvus")
+    if not neo4j_ok:
+        failed.append("Neo4j")
+    return (
+        f"[P1-9] 外存清理失败 ({', '.join(failed)})；"
+        f"已转 pending_cleanup 等待 cleanup_reaper_task 周期补偿"
     )
 
 

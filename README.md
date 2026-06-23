@@ -40,6 +40,46 @@ cp .env.example .env
 > 向量检索由 Milvus（3.5）承担，知识图谱由 Neo4j（3.6）承担，
 > 两者均通过 `.env` 配置独立服务地址，待对应模块开发时再启用。
 
+### 2.5 数据库迁移（Alembic）
+
+V2 hardening Batch 2（B M-01）起，项目用 Alembic 管理 PostgreSQL schema 演进，
+取代手工 `ALTER TABLE` 与启动期的 `_ensure_v2_compat_columns` 兜底。
+
+**新部署（空库）**：
+
+```bash
+conda activate geo_agent
+alembic upgrade head
+```
+
+**已有 V1.5 / V2.0 库（避免覆写已有数据）**：
+
+```bash
+# 仅标记当前库已升级到最新迁移版本，不实际执行 SQL
+alembic stamp head
+alembic current   # 验证：应输出当前最新 revision id (head)
+```
+
+**新增 schema 改动**：
+
+```bash
+# 1. 改 app/models/*.py
+# 2. 自动生成迁移脚本（生成在 alembic/versions/YYYYMMDD_<rev>_<slug>.py）
+alembic revision --autogenerate -m "<本次改动的简要描述>"
+# 3. 人工 review 迁移脚本（autogen 不会处理 enum 改名 / 数据迁移等复杂场景）
+# 4. 应用迁移
+alembic upgrade head
+# 5. 双向校验：能回滚 -> 能再升级，确认 downgrade() 没写漏
+alembic downgrade -1
+alembic upgrade head
+```
+
+> ⚠️ 生产环境改 schema 前必须先在测试库跑过 `upgrade head` + `downgrade -1` 双向校验。
+>
+> 配置入口：[alembic.ini](alembic.ini) + [alembic/env.py](alembic/env.py)。
+> env.py 直接从 `app.core.config.get_settings().database_url` 拿 DB URL，
+> 与 `.env` 单一来源，不存在配置漂移。
+
 ### 3. 启动服务
 
 ```bash
