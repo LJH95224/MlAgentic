@@ -173,7 +173,7 @@ async def _force_kill(proc: asyncio.subprocess.Process) -> None:
     except ProcessLookupError:
         # 进程在我们 kill 之前已经退出
         return
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.error("强制 kill 失败: pid=%s err=%s", proc.pid, e)
 
     # 等待 OS 真正回收，避免僵尸进程

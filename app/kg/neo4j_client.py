@@ -93,7 +93,7 @@ async def init_neo4j() -> "AsyncDriver":
 
     try:
         await _driver.verify_connectivity()
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         # 不吞异常 —— 启动期连不上 Neo4j 应该让应用直接挂掉
         await _driver.close()
         _driver = None

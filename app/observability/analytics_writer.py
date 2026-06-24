@@ -137,13 +137,18 @@ async def write_analytics_snapshot(
         row = QueryAnalytics(**data)
         db.add(row)
         await db.commit()
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.warning("Analytics 快照写入失败（已忽略）: %s", e)
         # 失败时回滚，避免 session 处于损坏状态影响后续操作
+        # A P2-19：rollback 失败也必须留 warning，不能裸吞——
+        # 否则 session 处于半损坏状态时调用方完全看不到任何痕迹，
+        # 后续操作链一旦报错很难溯源。
         try:
             await db.rollback()
-        except Exception:
-            pass
+        except Exception as rb_err:  # noqa: BLE001
+            logger.warning(
+                "Analytics rollback 失败（session 可能已损坏）: %s", rb_err
+            )
 
 
 __all__ = ["build_analytics_snapshot", "write_analytics_snapshot"]

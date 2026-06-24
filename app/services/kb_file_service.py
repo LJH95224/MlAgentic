@@ -110,7 +110,7 @@ def _save_upload_streaming(
                 out.write(chunk)
     except BusinessError:
         raise
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         # IO 失败：清掉半成品防垃圾
         dst_path.unlink(missing_ok=True)
         raise BusinessError(
@@ -195,7 +195,7 @@ async def upload_file(
 
     try:
         await db.commit()
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         await db.rollback()
         # PG 失败 → 清磁盘文件防垃圾
         dst_path.unlink(missing_ok=True)
@@ -464,7 +464,7 @@ async def delete_file(
     kb_file.status = FILE_STATUS_DELETING
     try:
         await db.commit()
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         await db.rollback()
         raise BusinessError(
             error_codes.INTERNAL_ERROR, f"文件状态切换失败：{e}"
@@ -490,7 +490,7 @@ async def delete_file(
         )
         try:
             await db.commit()
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             await db.rollback()
             raise BusinessError(
                 error_codes.INTERNAL_ERROR, f"文件元数据删除失败：{e}"
@@ -520,7 +520,7 @@ async def delete_file(
         )
         try:
             await db.commit()
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             await db.rollback()
             raise BusinessError(
                 error_codes.INTERNAL_ERROR,

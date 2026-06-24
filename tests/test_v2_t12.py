@@ -237,6 +237,54 @@ class TestAnalyticsWriter:
         assert snap["bm25_contributed"] is False
 
 
+# ──────────────── A P2-19：rollback 失败必须留日志 ────────────────
+
+
+class TestAnalyticsWriterRollbackFailure:
+    """A P2-19：write_analytics_snapshot 在 rollback 也失败时不能裸吞。
+
+    原行为：commit 失败 → rollback 也失败 → except: pass，无任何痕迹。
+    修复后：rollback 失败必须 logger.warning，便于排查 session 半损坏的连锁问题。
+    """
+
+    @pytest.mark.asyncio
+    async def test_rollback_failure_logs_warning(self, caplog):
+        """commit 抛 + rollback 也抛时，两条 warning 都要出来。"""
+        import logging
+        from app.observability.analytics_writer import write_analytics_snapshot
+
+        mock_db = MagicMock()
+        # add 是同步调用
+        mock_db.add = MagicMock()
+        # commit / rollback 都抛
+        mock_db.commit = AsyncMock(side_effect=RuntimeError("commit boom"))
+        mock_db.rollback = AsyncMock(side_effect=RuntimeError("rollback boom"))
+
+        with caplog.at_level(logging.WARNING, logger="app.observability.analytics_writer"):
+            await write_analytics_snapshot(
+                db=mock_db,
+                trace_id="t-1",
+                session_id=None,
+                kb_id=None,
+                total_latency_ms=10,
+                confidence=0.5,
+                enable_faithfulness_check=False,
+                steps=[],
+            )
+
+        # 主路径 commit 失败的 warning 必有
+        assert any("快照写入失败" in r.message for r in caplog.records), (
+            "commit 失败应记录 warning"
+        )
+        # A P2-19：rollback 失败的 warning 也必有，不能裸吞
+        assert any("rollback" in r.message.lower() for r in caplog.records), (
+            "rollback 失败必须留日志，避免静默吞异常"
+        )
+        # 验证两个调用都发生过
+        mock_db.commit.assert_awaited_once()
+        mock_db.rollback.assert_awaited_once()
+
+
 # ──────────────── /v2/query 集成 ────────────────
 
 

@@ -207,13 +207,23 @@
 
 ## 四、Batch 3 / 长期质量项
 
-- [ ] **A P2-19：静默吞异常处补日志或降级标志**
-  - 散落多处，需要全仓 grep `except Exception:` 后逐处决策（抛 / 降级 / 软失败标志）。
-  - 预估：1.5 小时。
+- [x] **A P2-19：静默吞异常处补日志或降级标志**（已完成 2026-06-23）
+  - **盘点**：全仓 `except Exception` 共 97 处分布在 34 个文件；其中 60 处已有 `# noqa: BLE001` 标注，剩余 37 处未标注。
+  - **语义分类**（37 处审视结果）：14 处重抛（`raise ParseError/BusinessError/RuntimeError from e` 的显式契约） / 10 处降级返回兜底值 / 10 处软失败（log warning 不阻断主链路） / 2 处资源 close 静默 / 1 处 AGT-04 错误反思（catch 后回喂 ToolMessage） / **1 处真正裸吞** —— [../../app/observability/analytics_writer.py:145](../../app/observability/analytics_writer.py#L145) rollback 失败 `except Exception: pass` 无任何日志。
+  - **关键修复**：[../../app/observability/analytics_writer.py](../../app/observability/analytics_writer.py) `write_analytics_snapshot` 内层 rollback 失败补 `logger.warning("Analytics rollback 失败（session 可能已损坏）: %s", rb_err)`，避免 session 半损坏时调用方完全看不到痕迹的连锁排查痛点。
+  - **全仓标注**：其余 35 处合规 broad except 统一追加 `# noqa: BLE001` 标注（仅注释，零语义变更），完成后全仓 97 处 broad except 全部有标注，ruff `BLE001` 规则未来开启时不会喷红一片。
+  - **测试**：[../../tests/test_v2_t12.py](../../tests/test_v2_t12.py) 新增 `TestAnalyticsWriterRollbackFailure::test_rollback_failure_logs_warning`（commit + rollback 双失败时验证两条 warning 都进 caplog）。
+  - **语法验证**：`python -m compileall` 覆盖 16 个改动文件全部通过。
+  - **范围说明**：本项仅做"裸吞补日志 + 标注"，**不重构异常处理结构**（如改 BusinessError、加 retry 等）——那是另一个迭代的工作量。
 
-- [ ] **A P2-15：补齐重点模块纯单测**
-  - 范围模糊，建议先列出"重点模块"清单（Agent runner / hybrid_retriever / KG writer / Citation parser 等）再分批。
-  - 预估：未定，按模块拆。
+- [x] **A P2-15：补齐重点模块纯单测**（已完成 2026-06-23）
+  - [x] 盘点：19 个重点模块中 2 个**完全缺测试**（embedding.py / llm/messages.py），4 个**覆盖偏薄**（kg/writer / agent/nodes / agent/runner / async_utils）
+  - [x] **[app/rag/embedding.py](../../app/rag/embedding.py)** 补纯单测：新增 [../../tests/test_rag_embedding.py](../../tests/test_rag_embedding.py) **12 case**（BuildKwargs 5 + HappyPath 3 + Validation 4），覆盖 _build_kwargs 拼装 / aembed_texts 维度校验 / 乱序排序 / Pydantic 响应 / 异常透传
+  - [x] **[app/llm/messages.py](../../app/llm/messages.py)** 补纯单测：新增 [../../tests/test_llm_messages.py](../../tests/test_llm_messages.py) **12 case**（SimpleMessages 3 + Assistant 4 + ToolResult 3 + DefineTool 2 + assistant↔tool_result 闭环引用），锁住 OpenAI/LiteLLM dict 兼容契约
+  - [x] **[app/kg/writer.py](../../app/kg/writer.py)** 补行为单测：新增 [../../tests/test_kg_writer_behavior.py](../../tests/test_kg_writer_behavior.py) **11 case**（UpsertDocument 2 + UpsertEntity 2 + LinkEntityToChunk 2 + BulkUpsertEntities 3 + BulkLinkEntitiesToChunk 2 + 共享 _MockDriver/_MockSession/_MockTx 链）。补齐原 6 case 仅覆盖 Cypher 文本静态检查的缺口——驱动 → session(database=...) → execute_write → tx.run(cypher, **params) 全链路 mock，精确断言参数化变量传递、空 rows 短路、single() 返 None 的兜底；新增"同名不同类型的复合键独立性"断言。
+  - [x] **[app/core/async_utils.py](../../app/core/async_utils.py)** 补边界单测：新增 [../../tests/test_async_utils_edges.py](../../tests/test_async_utils_edges.py) **7 case**（空列表短路 2 + 超时日志埋点 2 + 异常透传语义 2 + Iterable generator 兼容 1）。补齐原 5 case 仅覆盖 happy path 的缺口——空列表早返不触发空 gather、超时 warning 必须含 label/count、非 TimeoutError 子任务异常原样透传、generator 表达式输入。
+  - **本批合计**：新增 4 个测试文件、**41 个 case**，覆盖 4 个 hot path 模块（embedding / llm-messages / kg-writer / async-utils）；全量 ruff 标注的 broad except 与之前 P2-19 联动，本批 + P2-19 共完成 Batch 3 全部确定性任务。
+  - **剩余 Batch 3 长期项**：A P2-16~18（风格打磨，按需挑） / B L-01~07（低优清理）—— 这些都属可选性价比低的项，建议不必赶。
 
 - [ ] **A P2-16/17/18：长函数拆分 / 命名统一 / 魔法数字配置化**
   - 纯打磨。建议只挑最影响阅读的几处做（如 `_main` in ingest_task.py），剩下跳过。
@@ -221,6 +231,13 @@
 
 - [ ] **B L-01~L-07：低优先级风格与性能清理**
   - 性价比低，最后再说。
+  - **L-06 已完成 2026-06-23**：[../../app/api/v2/endpoints/traces.py](../../app/api/v2/endpoints/traces.py) `list_session_traces` 原本"取本页 N 个 root_step → 每个再单独跑 count() 查 step_count"形成真实 N+1；改为本页 N 条 trace_id 入 `WHERE trace_id IN [...]` + `GROUP BY trace_id` 单次 SQL 拿全 step_count，整端点稳定 3 条 SQL（count 总数 / 根步骤分页 / group-by step_count）。空页跳 group-by 避免 `IN ()` 语法错。测试 [../../tests/test_v2_t3.py](../../tests/test_v2_t3.py) 新增两条 case：3 个 trace 时 execute.await_count == 3 + step_count_map 正确；空页 await_count == 2。
+  - L-01（Tracer 禁用时 yield 空 step）：本质就是 disabled 短路，调用方写 step_output 不抛错 = 期望行为；驳回。
+  - L-02（citation 同号引用顺序）：现实现 `seen` + 顺序列表已按"首次出现顺序"正确去重，描述本身有误；驳回。
+  - L-03（splitter `_TOKEN_LEN_FN` 线程安全）：FastAPI/Celery 都在单事件循环 + GIL 下走，最坏多初始化几次 encoder，无正确性问题；忽略。
+  - L-04（裸 except 分级）：[B Batch3 P2-19](#-batch-3--长期质量项) 已统一标 `# noqa: BLE001`，分级重构留给真实需要的迭代。
+  - L-05（task_id 二次 commit）：第一次 commit 是为了让 Celery worker 能查到 file，第二次写回是 task_id 落库，**结构必要**；多一次 round-trip 在量级上微不足道（10ms vs 文件解析的秒级），暂不动。
+  - L-07（ragas stub 注入）：ragas + LangChain 老版本依赖链的现实兼容代价，不是项目自身代码风格问题；忽略。
 
 ### 独立迭代（非 hardening）
 
@@ -243,6 +260,6 @@ pytest tests/ -v --tb=short
 pytest tests/smoke/ -v
 ```
 
-**Batch 2 已收尾（2026-06-22）** —— 第三段 6 项全部 ✅，xiugai.md 主线项目压完。剩余仅 Batch 3 长期跟踪项（A P2-19 静默吞异常 / A P2-15 重点模块单测 / A P2-16~18 风格打磨 / B L-01~07 低优清理），不必赶。
+**Batch 2 已收尾（2026-06-22）** —— 第三段 6 项全部 ✅，xiugai.md 主线项目压完。剩余仅 Batch 3 长期跟踪项（A P2-15 重点模块单测 / A P2-16~18 风格打磨 / B L-01~07 低优清理 —— A P2-19 已于 2026-06-23 收尾），不必赶。
 
 每完成一项**同步更新本文件勾选状态**，每个 Batch 收尾**同步更新 [../progress.md](../progress.md)**。

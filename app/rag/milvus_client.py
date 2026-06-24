@@ -69,7 +69,7 @@ def init_milvus() -> "MilvusClient":
             uri=settings.milvus_uri,
             token=settings.milvus_token or "",
         )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         # 不吞异常 —— 启动期连不上 Milvus 应该让应用直接挂掉
         raise RuntimeError(
             f"Milvus 连接失败 uri={settings.milvus_uri}：{e}"
@@ -176,7 +176,7 @@ def create_kb_collection(
                 schema=schema,
                 index_params=index_params,
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             # 创建失败要让上层回滚 PG（kb_service 里 try/except 捕捉）
             raise RuntimeError(
                 f"创建 KB Collection 失败 name={collection_name}: {e}"
@@ -225,7 +225,7 @@ def drop_kb_collection(kb_id: uuid.UUID | str) -> bool:
                 e,
             )
         client.drop_collection(collection_name)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         raise RuntimeError(
             f"删除 KB Collection 失败 name={collection_name}: {e}"
         ) from e
@@ -297,7 +297,7 @@ def create_v2_kb_collection(
                 schema=schema,
                 index_params=index_params,
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             raise RuntimeError(
                 f"创建 V2 KB Collection 失败 name={collection_name}: {e}"
             ) from e

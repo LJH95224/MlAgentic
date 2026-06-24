@@ -218,7 +218,7 @@ async def _v2_query_inner(
                     enable_faithfulness_check=resolved.enable_faithfulness_check,
                     steps=tracer.steps,
                 )
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 logger.warning("Analytics 快照写入失败: %s", e)
 
             return QueryResponse(
@@ -291,7 +291,7 @@ async def _v2_query_inner(
                 enable_faithfulness_check=resolved.enable_faithfulness_check,
                 steps=tracer.steps,
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.warning("Analytics 快照写入失败: %s", e)
 
     total_latency_ms = int((time.perf_counter() - start_time) * 1000)
@@ -503,6 +503,6 @@ async def generate_answer(
     except asyncio.TimeoutError:
         logger.error("V2 query LLM 生成超时（%.0fs），返回兜底文案", hard_timeout)
         return "抱歉，答案生成超时，请稍后重试。"
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.error("V2 query LLM 生成失败: %s", e)
         return f"生成答案时遇到错误：{type(e).__name__}。请稍后重试。"

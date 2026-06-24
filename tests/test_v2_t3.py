@@ -298,6 +298,103 @@ class TestTraceEndpoints:
         assert exc_info.value.code == error_codes.NOT_FOUND
         assert "trace_id=missing-trace 不存在" == exc_info.value.message
 
+    @pytest.mark.asyncio
+    async def test_list_session_traces_uses_single_group_by_for_step_counts(self):
+        """B L-06：list_session_traces 必须一次性 GROUP BY 取 step_count，
+        不再为每个 trace 单独跑 count()——避免 N+1。
+
+        本用例断言:
+        1. 总查询次数 == 3（count + 根步骤分页 + 单次 group-by），与 trace 数量无关
+        2. step_count_map 正确映射回每个 TraceListItem
+        3. 单次 group-by 查询不在 root_step 数量上线性扩展
+        """
+        from datetime import datetime, timezone
+
+        from app.api.v2.endpoints.traces import list_session_traces
+
+        session_id = uuid.uuid4()
+        now = datetime.now(timezone.utc)
+
+        # 构造 3 条根步骤（模拟一页 3 个 trace）
+        roots = []
+        for i in range(3):
+            root = MagicMock()
+            root.trace_id = f"trace-{i}"
+            root.session_id = session_id
+            root.kb_id = None
+            root.total_latency_ms = 100 * (i + 1)
+            root.created_at = now
+            roots.append(root)
+
+        # mock 三次 execute 的返回值（按调用顺序）
+        count_total_result = MagicMock()
+        count_total_result.scalar.return_value = 3
+
+        roots_result = MagicMock()
+        roots_result.scalars.return_value.all.return_value = roots
+
+        # group-by 单次返回 (trace_id, step_count) tuple list
+        group_by_result = MagicMock()
+        group_by_result.all.return_value = [
+            ("trace-0", 5),
+            ("trace-1", 7),
+            ("trace-2", 3),
+        ]
+
+        mock_db = MagicMock()
+        mock_db.execute = AsyncMock(
+            side_effect=[count_total_result, roots_result, group_by_result]
+        )
+
+        resp = await list_session_traces(
+            session_id=session_id,
+            page=1,
+            page_size=20,
+            db=mock_db,
+        )
+
+        # ① N+1 修复后整个流程只需 3 次 execute（count + 根步骤 + group-by）
+        assert mock_db.execute.await_count == 3, (
+            "list_session_traces 应只发 3 条 SQL（count 总数 / 根步骤分页 / 单次 group-by 取 step_count），"
+            f"实际发 {mock_db.execute.await_count} 条 —— 可能退化为 N+1"
+        )
+
+        # ② step_count 映射正确
+        assert resp.total == 3
+        assert len(resp.items) == 3
+        step_counts = {item.trace_id: item.step_count for item in resp.items}
+        assert step_counts == {"trace-0": 5, "trace-1": 7, "trace-2": 3}
+
+    @pytest.mark.asyncio
+    async def test_list_session_traces_no_roots_skips_group_by(self):
+        """空页（无根步骤）时不应跑 group-by 查询，避免 IN () 语法错误。"""
+        from app.api.v2.endpoints.traces import list_session_traces
+
+        session_id = uuid.uuid4()
+
+        count_total_result = MagicMock()
+        count_total_result.scalar.return_value = 0
+
+        roots_result = MagicMock()
+        roots_result.scalars.return_value.all.return_value = []
+
+        mock_db = MagicMock()
+        mock_db.execute = AsyncMock(
+            side_effect=[count_total_result, roots_result]
+        )
+
+        resp = await list_session_traces(
+            session_id=session_id,
+            page=1,
+            page_size=20,
+            db=mock_db,
+        )
+
+        # 空页只需 2 次查询（count + 根步骤），不应触发 group-by
+        assert mock_db.execute.await_count == 2
+        assert resp.total == 0
+        assert resp.items == []
+
 
 # ════════════════════════════════════════════════════════════════
 # 6. V2 router 挂载

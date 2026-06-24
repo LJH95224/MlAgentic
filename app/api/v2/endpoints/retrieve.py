@@ -49,7 +49,7 @@ async def v2_retrieve(
                     if body.enable_graph_rag:
                         try:
                             ner_entities = await extract_query_entities(body.query)
-                        except Exception as e:
+                        except Exception as e:  # noqa: BLE001
                             logger.warning("Retrieve Query NER 失败（已忽略）: %s", e)
                             ner_step.error_message = f"{type(e).__name__}: {e}"
                     ner_step.step_output = {"entity_count": len(ner_entities)}
@@ -62,7 +62,7 @@ async def v2_retrieve(
                         try:
                             kb_ids_str = [str(k) for k in body.kb_ids] if body.kb_ids else None
                             entity_tags = await anchor_to_graph(ner_entities, kb_ids_str)
-                        except Exception as e:
+                        except Exception as e:  # noqa: BLE001
                             logger.warning("Retrieve Graph RAG 失败（已忽略）: %s", e)
                             anchor_step.error_message = f"{type(e).__name__}: {e}"
                     anchor_step.step_output = {"tag_count": len(entity_tags)}
@@ -125,7 +125,7 @@ async def v2_retrieve(
                     trace_id=tracer.trace_id,
                     total_latency_ms=total_latency_ms,
                 )
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 logger.error("Retrieve 失败: %s", e, exc_info=True)
                 total_latency_ms = int((time.perf_counter() - start) * 1000)
                 return RetrieveResponse(

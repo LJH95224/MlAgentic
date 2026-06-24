@@ -123,7 +123,7 @@ async def tool_node(state: AgentState, config: RunnableConfig) -> dict[str, Any]
             logger.info("工具执行成功: %s output_len=%d", name, len(content))
             writer({"kind": "tool_end", "tool": name, "output": _truncate(content)})
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             # AGT-04: 不静默吞异常，把堆栈反馈给模型
             tb = traceback.format_exc()
             err_content = (

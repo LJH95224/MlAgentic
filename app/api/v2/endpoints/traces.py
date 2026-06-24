@@ -105,24 +105,29 @@ async def list_session_traces(
     )
     root_steps = result.scalars().all()
 
-    # 每个 root_step 对应一个 trace，统计其步骤数
-    items = []
-    for root in root_steps:
-        step_count_result = await db.execute(
-            select(func.count()).where(AgentTrace.trace_id == root.trace_id)
+    # B L-06：一次性 GROUP BY 取本页所有 trace 的 step_count，避免 N+1
+    # 旧实现每个 trace 跑一次 count()，trace 多时是真实瓶颈
+    trace_ids = [root.trace_id for root in root_steps]
+    step_count_map: dict[str, int] = {}
+    if trace_ids:
+        count_result = await db.execute(
+            select(AgentTrace.trace_id, func.count(AgentTrace.id))
+            .where(AgentTrace.trace_id.in_(trace_ids))
+            .group_by(AgentTrace.trace_id)
         )
-        step_count = step_count_result.scalar() or 0
+        step_count_map = {row[0]: row[1] for row in count_result.all()}
 
-        items.append(
-            TraceListItem(
-                trace_id=root.trace_id,
-                session_id=root.session_id,
-                kb_id=root.kb_id,
-                total_latency_ms=root.total_latency_ms,
-                step_count=step_count,
-                created_at=root.created_at,
-            )
+    items = [
+        TraceListItem(
+            trace_id=root.trace_id,
+            session_id=root.session_id,
+            kb_id=root.kb_id,
+            total_latency_ms=root.total_latency_ms,
+            step_count=step_count_map.get(root.trace_id, 0),
+            created_at=root.created_at,
         )
+        for root in root_steps
+    ]
 
     return TraceListResponse(
         items=items,

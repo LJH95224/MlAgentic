@@ -51,7 +51,7 @@ async def v2_rerank(body: RerankRequest) -> RerankResponse:
         # 按 rerank_score 降序（reranker 内部已排，这里保险再排一次）
         items.sort(key=lambda x: x.rerank_score, reverse=True)
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         # 降级：返回原顺序，分数标 0
         logger.warning("Rerank 端点降级: %s", e)
         items = [

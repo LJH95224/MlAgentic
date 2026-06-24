@@ -99,7 +99,7 @@ async def v2_generate(
             context=context,
             enable_citation_prompt=body.options.enable_citation,
         )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.error("Generate LLM 失败: %s", e, exc_info=True)
         total_latency_ms = int((time.perf_counter() - start) * 1000)
         return GenerateResponse(
@@ -133,7 +133,7 @@ async def v2_generate(
     if body.options.enable_faithfulness_check:
         try:
             faith_result = await check_faithfulness(answer=answer, context=context)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.warning("Generate faithfulness 失败（软降级）: %s", e)
             faith_result = FaithfulnessResult(status="skipped")
         if faith_result.unverified:
@@ -208,6 +208,6 @@ async def _generate_answer(
     except asyncio.TimeoutError:
         logger.error("Generate LLM 超时（%.0fs）", hard_timeout)
         return "抱歉，答案生成超时，请稍后重试。"
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.error("Generate LLM 失败: %s", e)
         raise

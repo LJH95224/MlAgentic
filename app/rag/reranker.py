@@ -152,7 +152,7 @@ class SiliconFlowReranker(BaseReranker):
         async with self._semaphore:
             try:
                 return await self._do_rerank(query, chunks, top_k)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 # 降级策略：失败时返回原顺序，记日志
                 logger.warning(
                     "Reranker 调用失败（降级返回原顺序）: %s", e
@@ -286,7 +286,7 @@ class LiteLLMReranker(BaseReranker):
         async with self._semaphore:
             try:
                 return await self._do_rerank(query, chunks, top_k)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 logger.warning(
                     "Reranker 调用失败（降级返回原顺序）: %s", e
                 )

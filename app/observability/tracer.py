@@ -171,7 +171,7 @@ class Tracer:
         self._parent_stack.append(step_type)
         try:
             yield record
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             # 步骤失败时记录错误
             record.error_message = f"{type(e).__name__}: {e}"[:2000]
             raise

@@ -1038,6 +1038,29 @@ python scripts/kg_smoke.py
 
 ## 历史变更
 
+- **2026-06-23**：V2 hardening Batch 3 · B L-06 traces 列表 N+1 修复
+  - **问题**：[app/api/v2/endpoints/traces.py](../app/api/v2/endpoints/traces.py) `list_session_traces` 取本页 N 条 root_step 后，每条单独跑 `SELECT count(*) FROM agent_traces WHERE trace_id = ...`，page_size=20 时一次列表 = 1+1+20 = 22 条 SQL。
+  - **修复**：本页 N 个 trace_id 一次 `WHERE trace_id IN [...]` + `GROUP BY trace_id` 拿全 step_count；空页跳过 group-by 避免 `IN ()` 语法错。整端点稳定 3 条 SQL（count 总数 / 根步骤分页 / 单次 group-by step_count）。
+  - **测试**：[tests/test_v2_t3.py](../tests/test_v2_t3.py) 新增 2 case——`test_list_session_traces_uses_single_group_by_for_step_counts` 用 `side_effect=[count_result, roots_result, group_by_result]` + `mock_db.execute.await_count == 3` 断言只 3 次 SQL，并验证 step_count_map 正确映射回 TraceListItem；`test_list_session_traces_no_roots_skips_group_by` 断言空页只 2 次 SQL。
+  - **xiugai.md 同步**：[docs/0617/xiugai.md](0617/xiugai.md) Batch 3 长期项 L-06 标完成，并对 L-01/L-02/L-03/L-04/L-05/L-07 6 项明确"驳回/忽略"理由（L-01 短路是期望行为 / L-02 现实现已按出现顺序去重 / L-03 GIL + 单事件循环下无正确性问题 / L-04 已统一 BLE001 标注 / L-05 结构必要 / L-07 ragas 老依赖兼容）。
+  - **语法验证**：`python -m compileall app/api/v2/endpoints/traces.py tests/test_v2_t3.py` 通过。
+
+- **2026-06-23**：V2 hardening Batch 3 · A P2-15 完成（4 个 hot 模块共 41 case）
+  - 盘点 19 个重点模块：2 个完全缺测试（embedding / llm/messages），4 个覆盖偏薄（kg/writer / agent/nodes / agent/runner / async_utils）
+  - 新增 [tests/test_rag_embedding.py](../tests/test_rag_embedding.py) **12 case**：`_build_kwargs` 拼装（5） + `aembed_texts` 正常路径（3） + 异常分支（4）；覆盖维度校验、乱序排序、Pydantic model_dump、条数不匹配、LiteLLM 异常透传、dimensions 不传的硬契约
+  - 新增 [tests/test_llm_messages.py](../tests/test_llm_messages.py) **12 case**：SimpleMessages 3 + Assistant 4 + ToolResult 3 + DefineTool 2，含 assistant↔tool_result 通过 id 闭环引用断言（ReAct 工具协议核心契约）
+  - 新增 [tests/test_kg_writer_behavior.py](../tests/test_kg_writer_behavior.py) **11 case**：mock AsyncDriver → session(database=...) → execute_write → tx.run(cypher, **params) 全链路；UpsertDocument 2 + UpsertEntity 2（含同名不同类型复合键独立性）+ LinkEntityToChunk 2 + BulkUpsertEntities 3（含空 rows 短路、single() None 兜底）+ BulkLinkEntitiesToChunk 2。原 [tests/test_kg_writer.py](../tests/test_kg_writer.py) 仅 6 case 覆盖 Cypher 文本静态检查，行为缺口由此补齐
+  - 新增 [tests/test_async_utils_edges.py](../tests/test_async_utils_edges.py) **7 case**：空列表短路 2 + 超时日志埋点 2（label/count 断言）+ 异常透传语义 2 + Iterable generator 兼容 1。原 [tests/test_async_utils.py](../tests/test_async_utils.py) 仅 5 case happy path，边界缺口由此补齐
+
+- **2026-06-23**：V2 hardening Batch 3 起步 · A P2-19 静默吞异常审视
+  - **盘点**：全仓 `except Exception` 共 97 处分布在 34 个文件；60 处已有 `# noqa: BLE001` 标注，37 处未标注。
+  - **语义分类**（37 处）：14 重抛 / 10 降级 / 10 软失败 / 2 资源 close / 1 AGT-04 错误反思 / **1 真正裸吞**（[app/observability/analytics_writer.py:145](../app/observability/analytics_writer.py#L145) rollback `except: pass`）。
+  - **关键修复**：[app/observability/analytics_writer.py](../app/observability/analytics_writer.py) `write_analytics_snapshot` 内层 rollback 失败补 `logger.warning("Analytics rollback 失败（session 可能已损坏）: %s", rb_err)`，避免 session 半损坏时排查无痕迹。
+  - **全仓标注**：其余 35 处合规 broad except 统一加 `# noqa: BLE001` 注释（零语义变更）；全仓 97 处现在 100% 有标注，未来开 `BLE001` ruff 规则不会一片红。
+  - **测试**：[tests/test_v2_t12.py](../tests/test_v2_t12.py) 新增 `TestAnalyticsWriterRollbackFailure::test_rollback_failure_logs_warning` 用 caplog 断言 commit + rollback 双失败时两条 warning 都出现。
+  - **语法验证**：`python -m compileall` 覆盖 16 个改动文件全部通过。
+  - **进展**：[docs/0617/xiugai.md](0617/xiugai.md) Batch 3 长期项首项 ✅。剩余 A P2-15 / A P2-16~18 / B L-01~07。
+
 - **2026-06-22**：V2 hardening Batch 2 收尾 · B M-04 + A P2-12 + B M-07
   - **B M-04 Trace 写入异步化**：[app/observability/tracer.py](../app/observability/tracer.py) `__aexit__` 改为 `asyncio.create_task(self._flush_to_db())` fire-and-forget + `_trace_flush_done` 回调（捕获 task.exception() 仅 warning）。高 QPS 下 `/v2/query` 尾部不再等 PG 写入完成。测试 [tests/test_v2_t3.py](../tests/test_v2_t3.py) 新增 `test_tracer_exit_schedules_flush_as_task`。
   - **A P2-12 死代码清理**：删除 `app/tasks/ingest_task_v1.py`（V1.5 七步管道归档，V2.0 已全面替换）；[app/tasks/ingest_task.py](../app/tasks/ingest_task.py) docstring 同步更新。

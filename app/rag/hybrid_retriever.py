@@ -195,7 +195,7 @@ async def hybrid_search(
                 rrf_k=settings.rrf_k,
             )
             all_results.extend(results)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.warning(
                 "hybrid_search: collection=%s 检索失败，尝试降级为纯向量检索: %s",
                 collection,
@@ -213,7 +213,7 @@ async def hybrid_search(
                     output_fields=output_fields,
                 )
                 all_results.extend(results)
-            except Exception as inner_e:
+            except Exception as inner_e:  # noqa: BLE001
                 logger.warning(
                     "hybrid_search: 降级检索也失败 collection=%s: %s",
                     collection,

@@ -90,7 +90,7 @@ def _parse_pdf_structured(path: Path) -> list[StructuredBlock]:
 
     try:
         doc = fitz.open(str(path))
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         raise ParseError(f"PDF 打开失败：{e}") from e
 
     blocks: list[StructuredBlock] = []
@@ -240,7 +240,7 @@ def _parse_docx_structured(path: Path) -> list[StructuredBlock]:
 
     try:
         doc = Document(str(path))
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         raise ParseError(f"docx 打开失败：{e}") from e
 
     blocks: list[StructuredBlock] = []
@@ -592,7 +592,7 @@ def _parse_pdf_text(path: Path) -> str:
     parts: list[str] = []
     try:
         doc = fitz.open(str(path))
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         raise ParseError(f"PDF 打开失败：{e}") from e
 
     try:
@@ -624,7 +624,7 @@ def _parse_docx_text(path: Path) -> str:
 
     try:
         doc = Document(str(path))
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         raise ParseError(f"docx 打开失败：{e}") from e
 
     parts: list[str] = []

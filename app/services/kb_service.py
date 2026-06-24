@@ -126,7 +126,7 @@ async def create_kb(
             error_codes.NAME_CONFLICT,
             f"知识库名称 '{name}' 已存在（并发冲突）",
         ) from e
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         await db.rollback()
         _safe_rollback_milvus(kb_id, reason=f"PG 写入失败: {e}")
         raise BusinessError(
@@ -287,7 +287,7 @@ async def delete_kb(db: AsyncSession, kb_id: uuid.UUID) -> None:
     kb.status = KB_STATUS_DELETING
     try:
         await db.commit()
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         await db.rollback()
         raise BusinessError(
             error_codes.INTERNAL_ERROR, f"知识库状态切换失败：{e}"
@@ -302,7 +302,7 @@ async def delete_kb(db: AsyncSession, kb_id: uuid.UUID) -> None:
         try:
             await db.delete(kb)
             await db.commit()
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             await db.rollback()
             logger.error(
                 "KB-05 PG 删除失败 kb_id=%s（Milvus/Neo4j 已清理，数据不一致）: %s",
@@ -336,7 +336,7 @@ async def delete_kb(db: AsyncSession, kb_id: uuid.UUID) -> None:
         )
         try:
             await db.commit()
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             await db.rollback()
             raise BusinessError(
                 error_codes.INTERNAL_ERROR,
