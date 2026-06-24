@@ -1,4 +1,4 @@
-"""KB 文件元数据相关的 Pydantic Schema（V1.5 PRD §3.3 FILE-01~05）。
+"""KB 文件元数据相关的 Pydantic Schema（PRD §3.3 FILE-01~05）。
 
 字段约束严格对齐 PRD §5.3 kb_files 表 + FILE-02/03 列表 / 详情字段。
 请求体只有"无"（multipart/form-data 直接接 UploadFile）；响应体覆盖 5 个 endpoint。
@@ -35,7 +35,7 @@ class FileListItem(BaseModel):
     chunk_count: int
     summary_brief: str | None = Field(
         default=None,
-        description="V2.0 IDP-05 文档摘要（不超过 100 字），用于列表展示",
+        description="IDP-05 文档摘要（不超过 100 字），用于列表展示",
     )
     created_at: datetime
     completed_at: datetime | None = None
@@ -47,7 +47,7 @@ class FileDetail(BaseModel):
     """文件详情 + 进度（FILE-03）。
 
     比 FileListItem 多三个字段：entity_count / error_message / celery_task_id；
-    V2.0 起额外暴露 doc_metadata（IDP-05 提取的结构化元数据）。
+    额外暴露 doc_metadata（IDP-05 提取的结构化元数据）。
     前端按 2s 轮询此接口观测入库进度，看到 progress=100 且 status=completed 即停。
     """
 
@@ -62,11 +62,11 @@ class FileDetail(BaseModel):
     entity_count: int
     summary_brief: str | None = Field(
         default=None,
-        description="V2.0 IDP-05 文档摘要（不超过 100 字）",
+        description="IDP-05 文档摘要（不超过 100 字）",
     )
     doc_metadata: dict | None = Field(
         default=None,
-        description="V2.0 IDP-05 结构化元数据（doc_type / doc_date / language / key_topics 等）",
+        description="IDP-05 结构化元数据（doc_type / doc_date / language / key_topics 等）",
     )
     error_message: str | None = None
     celery_task_id: str | None = None

@@ -1,4 +1,4 @@
-"""V2.0 RAGAS 评估相关 Schema（EVA-01/02/03）。
+"""RAGAS 评估相关 Schema（EVA-01/02/03）。
 
 请求/响应结构按 PRD §777-863 对齐：
 - POST /api/v2/knowledge-bases/{kb_id}/evaluate

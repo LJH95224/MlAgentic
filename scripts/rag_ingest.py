@@ -182,7 +182,7 @@ async def ingest_file(
                 "vector": vec,
                 "document_id": document_id,
                 "content": chunk_text,
-                "allowed_roles": ["ALL"],  # V1.0 全局可见
+                "allowed_roles": ["ALL"],  # 全局可见
                 "entity_tags": tag_names,
                 "metadata": {
                     "type": doc_type,

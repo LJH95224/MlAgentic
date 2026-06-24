@@ -1,10 +1,10 @@
 """SQLAlchemy 2.0 异步引擎与 Session 工厂。
 
-V1.0 仅使用一个全局 engine。生命周期由 FastAPI lifespan 控制：
-- 应用启动时：create_all（V1.0 阶段直接建表，未引入 alembic）。
+仅使用一个全局 engine。生命周期由 FastAPI lifespan 控制：
+- 应用启动时：create_all（直接建表，未引入 alembic）。
 - 应用关闭时：engine.dispose()。
 
-V1.5 改造（测试环境稳定性）：
+改造（测试环境稳定性）：
 - 检测到 TEST_DATABASE_URL（即跑 pytest 集成测试）时，自动用 NullPool 替代默认池
 - 原因：pytest-asyncio 每个用例独立 event loop，连接池里残留的 asyncpg 连接绑在
   前一个 loop 上，下个用例复用 → "Event loop is closed" / WinError 121 信号灯超时；

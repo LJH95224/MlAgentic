@@ -1,4 +1,4 @@
-"""V2.0 Citation 模块（CHC-01/02）。
+"""Citation 模块（CHC-01/02）。
 
 核心函数：
 - build_context_with_citation(chunks)：构建带 [1][2] 引用标记的 context

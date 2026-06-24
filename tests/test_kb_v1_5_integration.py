@@ -1,4 +1,4 @@
-"""V1.5 KB-01~05 集成测试（依赖真 PostgreSQL + 真 Milvus；跳过 Neo4j）。
+"""KB-01~05 集成测试（依赖真 PostgreSQL + 真 Milvus；跳过 Neo4j）。
 
 需要：
 - TEST_DATABASE_URL=postgresql+asyncpg://...

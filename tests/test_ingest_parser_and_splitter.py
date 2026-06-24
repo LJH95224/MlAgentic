@@ -1,4 +1,4 @@
-"""V1.5 S3.0 ingest 模块单测：解析器 + 切片器。
+"""ingest 模块单测：解析器 + 切片器。
 
 Fixture 策略：每用例临时目录里生成最小可解析的测试文件（PDF/docx 用代码生成、
 md/txt 直接写），跑完自动清理。不依赖 tests/fixtures/ 静态样本，避免污染 repo。
@@ -118,7 +118,7 @@ def gbk_txt_file(tmp_path: Path) -> Path:
 
 
 def test_supported_extensions_v1_5_first_release():
-    """V1.5 第一版只支持 4 种；.doc 推迟（dev_plan S3.7）。"""
+    """第一版只支持 4 种；.doc 推迟。"""
     assert SUPPORTED_EXTENSIONS == frozenset({".pdf", ".docx", ".md", ".txt"})
 
 

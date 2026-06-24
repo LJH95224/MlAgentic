@@ -1,6 +1,6 @@
-"""结构感知文档解析层（V2.0 IDP-01）。
+"""结构感知文档解析层（IDP-01）。
 
-V1.5 的 parse_document() 输出纯文本 `str`；V2.0 升级为输出 `list[StructuredBlock]`，
+parse_document() 输出纯文本 `str`；parse_document_structured() 输出 `list[StructuredBlock]`，
 每个 block 携带 block_type / heading_path / page_number / position_index 等元数据。
 
 支持格式：
@@ -10,9 +10,9 @@ V1.5 的 parse_document() 输出纯文本 `str`；V2.0 升级为输出 `list[Str
 - .txt  → 单 block_type=paragraph，heading_path=[]
 
 设计要点：
-- 保留 V1.5 的 `parse_document()` 作为兼容入口（返回 str），供 V1.5 /api/v1/ 使用
-- 新增 `parse_document_structured()` 返回 `list[StructuredBlock]`，供 V2.0 使用
-- 两者共享底层解析器，只差最后一步拼装
+- 保留 `parse_document()` 作为兼容入口（返回 str）
+- `parse_document_structured()` 返回 `list[StructuredBlock]`
+- 两者为独立实现，text 版本输出纯文本，structured 版本保留结构元数据
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 # ──────────────── 公共类型 ────────────────
 
 
-# V1.5 兼容：支持的扩展名
+# 支持的扩展名
 SUPPORTED_EXTENSIONS: frozenset[str] = frozenset({".pdf", ".docx", ".md", ".txt"})
 
 # 各扩展名期望的 MIME 集合
@@ -47,12 +47,12 @@ class ParseError(Exception):
     """解析失败的统一异常。"""
 
 
-# ──────────────── V2.0 结构感知类型 ────────────────
+# ──────────────── 结构感知类型 ────────────────
 
 
 @dataclass(frozen=True)
 class StructuredBlock:
-    """V2.0 结构感知解析的输出单元（IDP-01）。
+    """结构感知解析的输出单元（IDP-01）。
 
     每个块代表文档中一个语义完整的片段，携带结构元数据。
     后续 StructuredSplitter 会基于这些元数据做智能切片。
@@ -71,7 +71,7 @@ def _make_block_id() -> str:
     return uuid.uuid4().hex
 
 
-# ──────────────── V2.0 结构感知解析器 ────────────────
+# ──────────────── 结构感知解析器 ────────────────
 
 
 def _parse_pdf_structured(path: Path) -> list[StructuredBlock]:
@@ -573,7 +573,7 @@ def _parse_txt_structured(path: Path) -> list[StructuredBlock]:
 # ──────────────── 分发表 ────────────────
 
 
-# V2.0 结构感知解析器
+# 结构感知解析器
 _STRUCTURED_PARSERS: dict[str, Callable[[Path], list[StructuredBlock]]] = {
     ".pdf": _parse_pdf_structured,
     ".docx": _parse_docx_structured,
@@ -581,9 +581,9 @@ _STRUCTURED_PARSERS: dict[str, Callable[[Path], list[StructuredBlock]]] = {
     ".txt": _parse_txt_structured,
 }
 
-# V1.5 兼容解析器（返回 str；保留原始 V1.5 实现，不包装结构化解析器）
+# 兼容解析器（返回 str；保留原始实现，不包装结构化解析器）
 def _parse_pdf_text(path: Path) -> str:
-    """V1.5 兼容：PDF → 纯文本。原始实现保留，空页 warning 逻辑不变。"""
+    """PDF → 纯文本。原始实现保留，空页 warning 逻辑不变。"""
     try:
         import fitz  # pymupdf
     except ImportError as e:
@@ -616,7 +616,7 @@ def _parse_pdf_text(path: Path) -> str:
 
 
 def _parse_docx_text(path: Path) -> str:
-    """V1.5 兼容：DOCX → 纯文本。"""
+    """DOCX → 纯文本。"""
     try:
         from docx import Document
     except ImportError as e:
@@ -641,7 +641,7 @@ def _parse_docx_text(path: Path) -> str:
 
 
 def _parse_md_text(path: Path) -> str:
-    """V1.5 兼容：Markdown 剥语法符号后取纯文本。"""
+    """Markdown 剥语法符号后取纯文本。"""
     try:
         from markdown_it import MarkdownIt
     except ImportError as e:
@@ -683,7 +683,7 @@ def _parse_md_text(path: Path) -> str:
 
 
 def _parse_txt_text(path: Path) -> str:
-    """V1.5 兼容：TXT → 纯文本。"""
+    """TXT → 纯文本。"""
     try:
         return path.read_text(encoding="utf-8")
     except UnicodeDecodeError as e:
@@ -716,7 +716,7 @@ def check_mime_compatibility(filename: str, declared_mime: str | None) -> bool:
 
 
 def parse_document(path: str | Path, *, filename: str | None = None) -> str:
-    """V1.5 兼容入口：根据扩展名分发到具体解析器，返回纯文本。
+    """兼容入口：根据扩展名分发到具体解析器，返回纯文本。
 
     Args:
         path: 磁盘路径
@@ -739,7 +739,7 @@ def parse_document(path: str | Path, *, filename: str | None = None) -> str:
             f"不支持的文件扩展名: {ext}（当前支持 {sorted(SUPPORTED_EXTENSIONS)}）"
         )
 
-    logger.info("解析文件(V1.5兼容): name=%s ext=%s", filename or p.name, ext)
+    logger.info("解析文件: name=%s ext=%s", filename or p.name, ext)
     text = parser(p)
     logger.info("解析完成: name=%s 文本长度=%d", filename or p.name, len(text))
     return text
@@ -748,7 +748,7 @@ def parse_document(path: str | Path, *, filename: str | None = None) -> str:
 def parse_document_structured(
     path: str | Path, *, filename: str | None = None
 ) -> list[StructuredBlock]:
-    """V2.0 结构感知解析入口：返回 StructuredBlock 列表。
+    """结构感知解析入口：返回 StructuredBlock 列表。
 
     Args:
         path: 磁盘路径
@@ -783,14 +783,14 @@ def parse_document_structured(
 
 
 __all__ = [
-    # V1.5 兼容
+    # 兼容路径
     "SUPPORTED_EXTENSIONS",
     "EXPECTED_MIMES",
     "ParseError",
     "is_supported_filename",
     "check_mime_compatibility",
     "parse_document",
-    # V2.0 结构感知
+    # 结构感知路径
     "StructuredBlock",
     "parse_document_structured",
 ]

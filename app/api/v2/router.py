@@ -1,7 +1,7 @@
 """V2 API 路由聚合。
 
 所有 /api/v2/ 下的端点集中注册于此。
-V1.5 的 /api/v1/ 完全不动，V2 在独立前缀下并存。
+/api/v1/ 在独立前缀下并存。
 """
 
 from fastapi import APIRouter
@@ -12,9 +12,9 @@ router = APIRouter(prefix="/api/v2")
 
 router.include_router(traces.router)
 router.include_router(query.router)
-# T12 OBS-03 聚合统计
+# OBS-03 聚合统计
 router.include_router(analytics.router)
-# T11 RAGAS 评估：两个 router（PRD 路径 POST /evaluate + GET /evaluations[/{id}]）
+# RAGAS 评估：两个 router（PRD 路径 POST /evaluate + GET /evaluations[/{id}]）
 router.include_router(evaluations.create_router)
 router.include_router(evaluations.router)
 router.include_router(retrieve.router)

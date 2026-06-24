@@ -1,4 +1,4 @@
-"""RAGAS 4 项指标评估管道（V2.0 EVA-02，T11 阶段）。
+"""RAGAS 4 项指标评估管道（EVA-02）。
 
 使用 ragas 0.2+ 官方库的 `evaluate()` API 计算 4 项核心指标：
 - faithfulness：答案事实是否有文档支撑

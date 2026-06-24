@@ -1,10 +1,10 @@
-"""query_knowledge_graph 工具（KG-03 + V1.5 KB-06）。
+"""query_knowledge_graph 工具（KG-03 + KB-06）。
 
 Agent 在 ReAct 循环中主动调用：
 - 当问题涉及实体之间的关系、间接关联、多跳推理时使用
 - 与 search_knowledge_base 互补：图谱锚定 + 向量精筛 = Graph RAG（KG-04）
 
-V1.5 KB-06：从 contextvar 读 current_kb_ids 决定查哪些 KB 的子图，
+KB-06：从 contextvar 读 current_kb_ids 决定查哪些 KB 的子图，
 LLM 不可见 kb_ids 参数（由 endpoint 层从用户请求注入）。
 
 异常透传：底层错误抛回 LangGraph tool_node，由它转为 ToolMessage(status="error")
@@ -53,10 +53,10 @@ async def query_knowledge_graph(
         格式化的路径字符串。每条形如 "[N] start → REL → mid → REL → end"。
         无命中时返回提示文本。
     """
-    # V1.5 KB-06：从 contextvar 读 kb_ids 范围（LLM 不可见）
+    # 从 contextvar 读 kb_ids 范围（LLM 不可见）
     # 提前判 kb_ids=[] 早返 —— 不必拿 driver、不查 Neo4j
     # None / [] / [...] 三种语义与 retriever 对齐：
-    #   None  → 不过滤（V1.0 行为）
+    #   None  → 不过滤
     #   []    → 显式不查（直接返无结果）
     #   [...] → 限定到指定 KB
     current_kb_ids = get_current_kb_ids()

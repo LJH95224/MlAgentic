@@ -1,4 +1,4 @@
-"""V1.5 S3.2 文件入库端到端 smoke 脚本（手动跑）。
+"""文件入库端到端 smoke 脚本（手动跑）。
 
 前置条件：
 1. PostgreSQL 起着（docker compose up -d postgres）
@@ -239,7 +239,7 @@ def _upload_dir_for_kb(kb_id: str) -> Path:
 
 
 async def main() -> None:
-    logger.info("=== V1.5 S3.2 smoke 开始 base_url=%s ===", BASE_URL)
+    logger.info("=== smoke 开始 base_url=%s ===", BASE_URL)
 
     # trust_env=False：忽略 HTTP_PROXY / HTTPS_PROXY 环境变量，
     # 直连 127.0.0.1。避免 Clash / 公司代理把本地请求转出去回不来变 502。
@@ -357,7 +357,7 @@ async def main() -> None:
         else:
             logger.info("    （用的是真实文档 %s，保留不删）", test_doc.name)
 
-    logger.info("=== ✓ V1.5 S3.2 smoke 全部通过 ===")
+    logger.info("=== ✓ smoke 全部通过 ===")
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-"""V1.5 FILE-01~05 kb_file_service 单测（mock DB + mock Celery，CI 友好）。
+"""FILE-01~05 kb_file_service 单测（mock DB + mock Celery，CI 友好）。
 
 覆盖 endpoint mock 测不到的"service 内部协调"逻辑：
 - _save_upload_streaming：边读边量 + 超限抛 + 删半成品 + IO 失败清理

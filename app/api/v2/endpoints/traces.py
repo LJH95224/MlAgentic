@@ -1,4 +1,4 @@
-"""V2.0 Trace 查询接口（OBS-02）。
+"""Trace 查询接口（OBS-02）。
 
 端点：
 - GET /api/v2/traces/{trace_id} — 返回单条 trace 完整步骤

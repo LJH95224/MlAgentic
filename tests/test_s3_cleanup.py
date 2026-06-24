@@ -1,4 +1,4 @@
-"""V1.5 S3.2 三联清理测试（FILE-04 / KB-05 / FILE-05）。
+"""三联清理测试（FILE-04 / KB-05 / FILE-05）。
 
 覆盖：
 - FILE-04 _cleanup_milvus_chunks_for_file：collection 存在 / 不存在 / Milvus 未初始化 / delete 失败

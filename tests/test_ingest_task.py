@@ -1,4 +1,4 @@
-"""V1.5 S3.2 ingest_task 单测（mock 所有外部依赖，验证管道逻辑）。
+"""ingest_task 单测（mock 所有外部依赖，验证管道逻辑）。
 
 覆盖：
 - _classify_retryable 异常分类
@@ -212,8 +212,8 @@ def patched_pipeline(monkeypatch):
 
     monkeypatch.setattr(ingest_task, "_step_ner", _fake_safe_ner_step)
 
-    # T7 新增的 IDP 步骤：默认全 mock 为 noop（不改 fine_chunks，不生成 td/coarse，
-    # 不写 doc_metadata），保持原 happy path 行为不变。需要单独验证 T7 路径的测试
+    # 新增的 IDP 步骤：默认全 mock 为 noop（不改 fine_chunks，不生成 td/coarse，
+    # 不写 doc_metadata），保持原 happy path 行为不变。需要单独验证该路径的测试
     # 用例可以在自己的 fixture 里再覆盖这三个函数。
     async def _noop_table_desc(fine_chunks, *, document_id):
         return []

@@ -1,4 +1,4 @@
-"""V1.5 KB-01~05 endpoint 行为测试（mock service 层，CI 友好）。
+"""KB-01~05 endpoint 行为测试（mock service 层，CI 友好）。
 
 验证：
 - 5 个 endpoint 的请求/响应包装、Pydantic 校验、错误码

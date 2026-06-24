@@ -1,4 +1,4 @@
-"""V2.0 Query 相关 Schema（UQA-01 / HRE-01 / HRE-02 / HRE-06）。"""
+"""Query 相关 Schema（UQA-01 / HRE-01 / HRE-02 / HRE-06）。"""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ class QueryOptions(BaseModel):
     """查询选项（HRE-06 三层合并的最高优先级层）。
 
     所有字段都用 ``None`` 表示「未指定，跟随 KB.retrieval_config 或全局 settings」；
-    显式传值才覆盖底层配置。``top_k`` 在 T8 之前默认 5，T8 起改为 None 让 resolve_options 决定。
+    显式传值才覆盖底层配置。``top_k`` 默认 None 让 resolve_options 决定。
     """
 
     top_k: int | None = Field(default=None, ge=1, le=50, description="返回结果数量")
@@ -24,7 +24,7 @@ class QueryOptions(BaseModel):
     bm25_enable: bool | None = Field(default=None, description="是否启用 BM25")
     stream: bool = Field(default=False, description="是否使用流式输出（SSE）")
 
-    # T8 新增 ─────────────────────────────────────
+    # 新增 ─────────────────────────────────────
     query_rewrite: str | None = Field(
         default=None,
         description="Query 改写策略：none / hyde / multi_query（HRE-01）",
@@ -73,7 +73,7 @@ class QueryResponse(BaseModel):
     trace_id: str | None = None
     total_latency_ms: int | None = None
 
-    # T8 新增：Query 增强阶段的可观测信息（调试用，前端可选展示）─────────────
+    # Query 增强阶段的可观测信息（调试用，前端可选展示）─────────────
     rewritten_query: str | None = Field(
         default=None,
         description="HyDE 改写后的假设性答案（仅 hyde 策略下有值）",
@@ -91,7 +91,7 @@ class QueryResponse(BaseModel):
         description="图谱锚定后注入到 Milvus entity_tags 的标签列表",
     )
 
-    # T9 新增：CHC-03 置信度评分 + CHC-04 答案自检 ─────────────────────
+    # CHC-03 置信度评分 + CHC-04 答案自检 ─────────────────────
     confidence: float | None = Field(
         default=None,
         ge=0.0,

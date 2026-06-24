@@ -5,7 +5,7 @@
 
 设计说明：
 - 使用 lifespan 替代已废弃的 on_event 钩子，集中管理资源生命周期。
-- V1.0 阶段：启动时 create_all 建表（仅包含已显式导入的模型）。
+- 启动时 create_all 建表（仅包含已显式导入的模型）。
   按新版 PRD，knowledge_chunks 由 Milvus 管理（详见 §3.5），不在 PostgreSQL 建表。
 - 3.5 阶段：lifespan 启动时初始化 Milvus（连接 + 幂等建库 + load），关闭时释放。
 - 3.6 阶段：lifespan 启动时初始化 Neo4j（连接 + 验证 + 幂等建约束），关闭时释放。
@@ -30,9 +30,9 @@ from app.models.base import Base
 from app.rag import close_milvus, init_milvus
 
 # 必须导入模型才能让 Base.metadata 感知到它们
-# V1.5：新增 KnowledgeBase / KbFile 两张表（PRD §5.2、§5.3）
+# KnowledgeBase / KbFile 两张表（PRD §5.2、§5.3）
 from app.models import ChatMessage, ChatSession, KbFile, KnowledgeBase  # noqa: F401
-# V2.0 新模型：AgentTrace / EvalTask（lifespan create_all 时自动建表）
+# AgentTrace / EvalTask（lifespan create_all 时自动建表）
 from app.models import AgentTrace, EvalTask  # noqa: F401
 
 logger = logging.getLogger(__name__)
@@ -42,24 +42,33 @@ _V2_COMPAT_COLUMNS: dict[str, dict[str, str]] = {
     "knowledge_bases": {
         "retrieval_config": "JSONB",
         "doc_metadata_schema": "JSONB",
+        # P1.9（2026-06-23 收尾）：KB 删除补偿状态
+        "updated_at": "TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL",
+        "cleanup_retry_count": "INTEGER DEFAULT 0 NOT NULL",
     },
     "kb_files": {
         "doc_metadata": "JSONB",
         "summary_brief": "TEXT",
+        # baseline_v2（2026-06-22）：processing 心跳锚点
+        "updated_at": "TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL",
+        # P1.9（2026-06-23）：KB 删除补偿状态
+        "cleanup_retry_count": "INTEGER DEFAULT 0 NOT NULL",
     },
 }
 
 
 def _build_v2_compat_alter_sql(existing: dict[str, set[str]]) -> list[str]:
-    """根据当前 PG 表结构生成 V2 兼容补列 SQL。
+    """根据当前 PG 表结构生成兼容补列 SQL。
 
-    历史背景：V1.5 → V2.0 升级期项目尚未引入 Alembic，`create_all` 只能建新表、
+    历史背景：升级期项目尚未引入 Alembic，`create_all` 只能建新表、
     不能给旧表补列，所以临时硬编码了这套兼容补丁。
 
-    现状（V2 hardening Batch 2 · B M-01 之后）：项目已引入 Alembic（详见 alembic/），
-    新增列 / schema 变更**统一走 `alembic revision --autogenerate` + `upgrade head`**，
-    不再扩张 `_V2_COMPAT_COLUMNS`。本函数保留是为了让 V1.5 阶段直接升上来的
-    旧库还能无痛 boot，等下个版本周期把它彻底删除。
+    现状：项目已引入 Alembic（详见 alembic/），
+    新增列 / schema 变更**统一走 `alembic revision --autogenerate` + `upgrade head`**。
+    **但只要 _V2_COMPAT_COLUMNS 还在用，新增列就必须同步登记到这里**（参见
+    tests/test_v2_t0.py 的 test_v2_compat_migration_allows_orm_query_on_legacy_v1_5_tables
+    —— 它的存在就是为了验证「旧 V1.5 库 + boot 期补列」能让 ORM SELECT 通过）。
+    下个版本周期统一切到 alembic upgrade head 后，本函数可以彻底删除。
     """
     statements: list[str] = []
     for table_name, columns in _V2_COMPAT_COLUMNS.items():
@@ -76,7 +85,7 @@ def _build_v2_compat_alter_sql(existing: dict[str, set[str]]) -> list[str]:
 
 
 async def _ensure_v2_compat_columns() -> None:
-    """启动期幂等补齐 V2.0 新增 PG 列，兼容旧 V1.5 数据库。"""
+    """启动期幂等补齐新增 PG 列，兼容旧数据库。"""
     table_names = tuple(_V2_COMPAT_COLUMNS)
     async with engine.begin() as conn:
         rows = await conn.execute(
@@ -114,7 +123,7 @@ async def _create_all_with_retry(max_attempts: int = 10) -> None:
 
     定位说明（B M-01 引入 Alembic 之后）：本函数仅作**开发态兜底**——
     - 测试环境：pytest fixture 起干净库时 create_all 比走 Alembic 快得多
-    - 旧 V1.5 库：与 _ensure_v2_compat_columns 配合无痛升级 V2.0
+    - 旧库：与 _ensure_compat_columns 配合无痛升级
     生产 / 正式部署请走 `alembic upgrade head`（详见 README.md §2.5），不要依赖本函数。
     """
     last_err: Exception | None = None
@@ -183,7 +192,7 @@ def create_app() -> FastAPI:
 
     app = FastAPI(
         title=settings.app_name,
-        description="GeoAgent V1.0 - 气象空间智能体基础后端引擎",
+        description="GeoAgent - 气象空间智能体后端引擎",
         version="0.1.0",
         lifespan=lifespan,
     )
@@ -202,7 +211,7 @@ def create_app() -> FastAPI:
             allow_headers=["*"],
         )
 
-    # V1.5 PRD §7.1：统一响应格式（BusinessError / HTTPException / 校验失败 / 未捕获异常
+    # PRD §7.1：统一响应格式（BusinessError / HTTPException / 校验失败 / 未捕获异常
     # 全部翻译成 {code, message, data}），SSE 流式响应不二次包装
     register_exception_handlers(app)
 

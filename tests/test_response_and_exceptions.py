@@ -4,7 +4,7 @@
 - ApiResponse 容器的成功/失败构造
 - 业务码 → HTTP 状态映射的完整性与对称性
 - BusinessError + 4 个 handler 的端到端行为（用一个临时 FastAPI app 接入 handler 后实测）
-- 验证 S1.0 阶段 handler **未挂到主 app**（不破坏 V1.0）
+- 验证 handler **未挂到主 app**（不破坏现有功能）
 """
 
 from http import HTTPStatus

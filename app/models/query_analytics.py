@@ -1,4 +1,4 @@
-"""query_analytics 表：V2.0 聚合统计快照（OBS-03）。
+"""query_analytics 表：聚合统计快照（OBS-03）。
 
 每次 /v2/query 调用结束时同步写一行汇总。
 analytics 端点对该表做 SQL 聚合，无需扫描 agent_traces 的 JSONB 字段。
@@ -21,7 +21,7 @@ from app.models.base import Base
 
 
 class QueryAnalytics(Base):
-    """查询聚合统计快照（V2.0 OBS-03）。"""
+    """查询聚合统计快照（OBS-03）。"""
 
     __tablename__ = "query_analytics"
 

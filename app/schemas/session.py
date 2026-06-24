@@ -1,9 +1,9 @@
-"""会话相关的 Pydantic Schema（V1.0 + V1.5）。
+"""会话相关的 Pydantic Schema。
 
-V1.5 改造原则：
+改造原则：
 - 旧 `CreateSessionResponse` 保留为向后兼容别名（指向 SessionDetail），
-  V1.0 的测试仍然能 `assert "id" in data`，不破坏
-- 所有新 endpoint 全部走 V1.5 新 schema：
+  测试仍然能 `assert "id" in data`，不破坏
+- 所有新 endpoint 全部走新 schema：
   - `SessionCreateRequest` / `SessionUpdateRequest`（请求）
   - `SessionDetail` / `SessionListItem` / `SessionListResponse`（响应）
 """
@@ -18,7 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class SessionCreateRequest(BaseModel):
-    """POST /api/v1/sessions 请求体（V1.5 SES-01）。
+    """POST /api/v1/sessions 请求体（SES-01）。
 
     `title` 可选；不传则由后续 SES-07 异步任务生成。
     """
@@ -39,7 +39,7 @@ class SessionCreateRequest(BaseModel):
 
 
 class SessionUpdateRequest(BaseModel):
-    """PATCH /api/v1/sessions/{sid} 请求体（V1.5 SES-04）。
+    """PATCH /api/v1/sessions/{sid} 请求体（SES-04）。
 
     仅 `title` 字段可手动修改（PRD 明确：其余元数据由系统维护）。
     `extra="forbid"` 会让传入其他字段（如试图改 summary / message_count）
@@ -67,7 +67,7 @@ class SessionUpdateRequest(BaseModel):
 
 
 class SessionDetail(BaseModel):
-    """会话详情（V1.5 SES-01 / SES-03 共用）。
+    """会话详情（SES-01 / SES-03 共用）。
 
     包含全部用户可见字段；其中 `summary` / `summarized_at` 在 SES-08 触发摘要前为 null。
     """
@@ -102,7 +102,7 @@ class SessionDetail(BaseModel):
 
 
 class SessionListItem(BaseModel):
-    """会话列表项（V1.5 SES-02）。
+    """会话列表项（SES-02）。
 
     PRD 明确：列表项含 id/title/summary_snippet(前80字)/message_count/updated_at；
     `summary` 全文不在列表中返回（性能考虑），需走 SES-03 详情接口。
@@ -129,7 +129,7 @@ class SessionListItem(BaseModel):
 
 
 class SessionListResponse(BaseModel):
-    """会话列表分页响应（V1.5 SES-02）。"""
+    """会话列表分页响应（SES-02）。"""
 
     items: list[SessionListItem]
     page: int = Field(..., ge=1, description="当前页码（从 1 起）")
@@ -137,10 +137,10 @@ class SessionListResponse(BaseModel):
     total: int = Field(..., ge=0, description="总数")
 
 
-# ──────────────── 向后兼容（V1.0 别名） ────────────────
+# ──────────────── 向后兼容（旧别名） ────────────────
 
 
-# V1.0 时的 `CreateSessionResponse{id, created_at}` 仍被外部代码 import，
+# 旧 `CreateSessionResponse{id, created_at}` 仍被外部代码 import，
 # 这里保留同名导出，但底层换成 SessionDetail（多字段，老测试 `"id" in data`
 # 仍然成立）。S2 阶段如确认无外部引用可删除此别名。
 CreateSessionResponse = SessionDetail
@@ -150,7 +150,7 @@ CreateSessionResponse = SessionDetail
 
 
 class SessionInfo(BaseModel):
-    """会话基础信息（仅 V1.0 内部脚本可能引用，保留避免破坏）。"""
+    """会话基础信息（仅内部脚本可能引用，保留避免破坏）。"""
 
     id: uuid.UUID
     created_at: datetime

@@ -1,11 +1,11 @@
-"""Milvus Collection Schema 定义（严格对齐 PRD §4.3 + V2.0 扩展）。
+"""Milvus Collection Schema 定义（严格对齐 PRD §4.3）。
 
 为什么单独成文件？
 - Schema 定义在客户端初始化、入库脚本、单测三处都要复用，集中维护避免漂移。
 - 字段维度、capacity 这类常量改起来必须同步动 Schema —— 放在一起降低误改风险。
 
-V2.0 变更（T0.3）：
-- 新增 `build_v2_kb_collection_schema()`：在 V1.5 基础上加 7 个字段
+关键变更：
+- 新增 `build_v2_kb_collection_schema()`：在基础 schema 上加 7 个字段
   （heading_path / block_type / page_number / position_index / parent_chunk_id / is_summary / sparse_vector）
 - 稀疏向量 `sparse_vector: SPARSE_FLOAT_VECTOR` 用于 BM25 混合检索
 - 索引：稠密向量 HNSW+COSINE，稀疏向量 SPARSE_INVERTED_INDEX+BM25
@@ -39,7 +39,7 @@ _MAX_ROLE_LEN = 32
 _MAX_ENTITY_TAGS = 50
 _MAX_ENTITY_TAG_LEN = 64
 
-# ── V2.0 新增字段常量 ──
+# 新增字段常量
 _MAX_HEADING_PATH_CAPACITY = 10  # 标题层级路径最多 10 级
 _MAX_HEADING_PATH_LEN = 256  # 单级标题最长 256 字符
 _MAX_BLOCK_TYPE_LEN = 32  # block_type 枚举最长
@@ -47,7 +47,7 @@ _MAX_PARENT_CHUNK_ID_LEN = 64  # 父 chunk ID（UUID hex）
 
 
 def build_knowledge_chunks_schema(dim: int = _DEFAULT_DIM) -> CollectionSchema:
-    """构建 knowledge_chunks Collection 的 Schema（V1.0 基线）。
+    """构建 knowledge_chunks Collection 的 Schema（基线）。
 
     Args:
         dim: 向量维度，必须与 Embedding 模型输出维度一致。
@@ -93,7 +93,7 @@ def build_knowledge_chunks_schema(dim: int = _DEFAULT_DIM) -> CollectionSchema:
             element_type=DataType.VARCHAR,
             max_capacity=_MAX_ROLES,
             max_length=_MAX_ROLE_LEN,
-            description="允许访问的角色列表（V1.0 暂存 ['ALL']）",
+            description="允许访问的角色列表（默认 ['ALL']）",
         ),
         # 实体标签列表（RAG-05）：与 Neo4j Entity 节点的 name 对齐
         FieldSchema(
@@ -102,7 +102,7 @@ def build_knowledge_chunks_schema(dim: int = _DEFAULT_DIM) -> CollectionSchema:
             element_type=DataType.VARCHAR,
             max_capacity=_MAX_ENTITY_TAGS,
             max_length=_MAX_ENTITY_TAG_LEN,
-            description="实体标签列表（与 Neo4j Entity.name 对齐，3.6 阶段写入）",
+            description="实体标签列表（与 Neo4j Entity.name 对齐）",
         ),
         # 动态元数据：文档类型 / 来源 / 入库时间等
         FieldSchema(
@@ -154,21 +154,20 @@ __all__ = [
     "build_knowledge_chunks_schema",
     "build_kb_collection_schema",
     "build_index_params",
-    # V2.0
     "build_v2_kb_collection_schema",
     "build_v2_index_params",
 ]
 
 
-# ──────────────── V1.5 多 KB Collection ────────────────
+# ──────────────── KB Collection ────────────────
 
 
-# KB Collection 比 V1.0 多一个 kb_id 冗余字段（PRD §5.4）
+# KB Collection 多一个 kb_id 冗余字段（PRD §5.4）
 _MAX_KB_ID_LEN = 64
 
 
 def build_kb_collection_schema(dim: int = _DEFAULT_DIM) -> CollectionSchema:
-    """构建 V1.5 KB Collection 的 Schema（在 V1.0 基础上加 kb_id 冗余字段）。
+    """构建 KB Collection 的 Schema（在基础 schema 上加 kb_id 冗余字段）。
 
     与 `build_knowledge_chunks_schema` 的差异：
     - 新增 `kb_id` VARCHAR(64) 字段（PRD §5.4）
@@ -178,11 +177,11 @@ def build_kb_collection_schema(dim: int = _DEFAULT_DIM) -> CollectionSchema:
     Args:
         dim: 向量维度，必须与 KB 配置的 embedding_dim 严格一致。
     """
-    # 复用 V1.0 的 7 个字段
+    # 复用基础 7 个字段
     base_schema = build_knowledge_chunks_schema(dim=dim)
     base_fields = list(base_schema.fields)
 
-    # 追加 V1.5 的 kb_id 字段
+    # 追加 kb_id 字段
     kb_id_field = FieldSchema(
         name="kb_id",
         dtype=DataType.VARCHAR,
@@ -192,21 +191,21 @@ def build_kb_collection_schema(dim: int = _DEFAULT_DIM) -> CollectionSchema:
 
     return CollectionSchema(
         fields=base_fields + [kb_id_field],
-        description="V1.5 KB 切片库（PRD §5.4，按 kb_id 独立 Collection）",
+        description="KB 切片库（PRD §5.4，按 kb_id 独立 Collection）",
         enable_dynamic_field=False,
     )
 
 
-# ──────────────── V2.0 KB Collection Schema ────────────────
+# ──────────────── KB Collection Schema（含结构感知 + BM25）───────────────
 
 
 def build_v2_kb_collection_schema(dim: int = _DEFAULT_DIM) -> CollectionSchema:
-    """构建 V2.0 KB Collection 的 Schema（15 字段 + BM25 Function）。
+    """构建 KB Collection 的 Schema（15 字段 + BM25 Function）。
 
-    V2.0 不复用 V1.5 base_fields，因为 content 字段需要加 enable_analyzer=True
+    不复用基础 base_fields，因为 content 字段需要加 enable_analyzer=True
     以支持 Milvus 内置 BM25 Function 自动从文本生成稀疏向量。
 
-    V2.0 关键变更：
+    关键变更：
     - content 字段加 enable_analyzer=True（Milvus BM25 Function 必需）
     - 添加 BM25 Function：content → sparse_vector（插入数据时自动计算）
     - sparse_vector 字段仍需显式定义，但插入时不需要手动填写
@@ -218,7 +217,7 @@ def build_v2_kb_collection_schema(dim: int = _DEFAULT_DIM) -> CollectionSchema:
     Returns:
         CollectionSchema 对象，可直接传给 MilvusClient.create_collection。
     """
-    # ── V1.0 基线 7 字段（content 加 enable_analyzer=True） ──
+    # ── 基线 7 字段（content 加 enable_analyzer=True） ──
     v2_base_fields = [
         FieldSchema(
             name="chunk_id",
@@ -271,7 +270,7 @@ def build_v2_kb_collection_schema(dim: int = _DEFAULT_DIM) -> CollectionSchema:
         ),
     ]
 
-    # ── V1.5 追加字段 ──
+    # ── 追加字段 ──
     v15_fields = [
         FieldSchema(
             name="kb_id",
@@ -281,7 +280,7 @@ def build_v2_kb_collection_schema(dim: int = _DEFAULT_DIM) -> CollectionSchema:
         ),
     ]
 
-    # ── V2.0 新增 7 个字段 ──
+    # ── 新增 7 个字段（结构感知 + BM25 稀疏向量） ──
     v2_fields = [
         FieldSchema(
             name="heading_path",
@@ -343,21 +342,21 @@ def build_v2_kb_collection_schema(dim: int = _DEFAULT_DIM) -> CollectionSchema:
     return CollectionSchema(
         fields=all_fields,
         functions=[bm25_function],
-        description="V2.0 KB 切片库（结构感知切片 + BM25 混合检索；IDP-01/02 + HRE-03）",
+        description="KB 切片库（结构感知切片 + BM25 混合检索；IDP-01/02 + HRE-03）",
         enable_dynamic_field=False,
     )
 
 
 def build_v2_index_params(client: MilvusClient) -> "object":
-    """构建 V2.0 索引参数：在 V1.5 基础上追加稀疏向量 BM25 索引。
+    """构建索引参数（含稀疏向量 BM25 索引）。
 
-    V2.0 索引方案：
-    - 稠密向量：HNSW + COSINE（同 V1.5）
-    - 稀疏向量：SPARSE_INVERTED_INDEX + BM25（V2.0 新增）
+    索引方案：
+    - 稠密向量：HNSW + COSINE
+    - 稀疏向量：SPARSE_INVERTED_INDEX + BM25
       - bm25_k1=1.2：词频饱和参数（标准值，控制词频增长曲线）
       - bm25_b=0.75：文档长度归一化参数（标准值，惩罚长文档）
       - drop_ratio_build=0.2：建索引时丢弃低频词后 20%，减小体积
-    - document_id：INVERTED（同 V1.5）
+    - document_id：INVERTED
 
     Returns:
         IndexParams 对象，直接喂给 create_collection。

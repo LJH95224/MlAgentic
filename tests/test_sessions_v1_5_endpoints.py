@@ -1,4 +1,4 @@
-"""V1.5 SES-01~06 endpoint 行为测试（不依赖真 DB；mock service 层）。
+"""SES-01~06 endpoint 行为测试（不依赖真 DB；mock service 层）。
 
 验证：
 - endpoint 是否正确包装响应为 ApiResponse[T]

@@ -1,4 +1,4 @@
-"""V2.0 T7 · 表格描述 + 双层索引 + 文档元数据 单测。
+"""表格描述 + 双层索引 + 文档元数据 单测。
 
 覆盖矩阵：
 - IDP-03 generate_table_descriptions：含表格 / 无表格 / 单张失败软跳过 / 超时 / 字节截断
@@ -697,7 +697,7 @@ class TestMainEndToEnd:
 
         monkeypatch.setattr(ingest_task, "_step_ner", fake_ner)
 
-        # mock T7 IDP 三步：返定值
+        # mock IDP 三步：返定值
         async def fake_table_desc(fine_chunks, *, document_id):
             # 给 1 张表生成 1 个 description chunk
             return [

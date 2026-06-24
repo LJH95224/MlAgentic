@@ -1,4 +1,4 @@
-"""知识库管理端点（V1.5 PRD §3.2 KB-01~05）。
+"""知识库管理端点（PRD §3.2 KB-01~05）。
 
 所有响应包成 ApiResponse[T]；错误走 BusinessError → 统一 handler 翻译。
 """
@@ -91,8 +91,8 @@ async def get_knowledge_base_detail(
 ) -> ApiResponse[KnowledgeBaseDetail]:
     """查询知识库详情（KB-03）。
 
-    `entity_count` 走 kb_service.count_entities_for_kb（S2 阶段 stub 返回 0；
-    S5 阶段接通 Neo4j 真实计数）。
+    `entity_count` 走 kb_service.count_entities_for_kb（stub 返回 0；
+    接通 Neo4j 真实计数）。
     """
     kb = await kb_service.get_kb_or_raise(db, kb_id)
     entity_count = await kb_service.count_entities_for_kb(kb_id)
@@ -113,7 +113,7 @@ async def update_knowledge_base(
     body: KnowledgeBaseUpdateRequest,
     db: DBSessionDep,
 ) -> ApiResponse[KnowledgeBaseDetail]:
-    """更新知识库 name / description / retrieval_config（KB-04 + V2.0 HRE-06）。
+    """更新知识库 name / description / retrieval_config（KB-04 + HRE-06）。
 
     PRD 明确：embedding_dim / chunk_size / chunk_overlap 创建后只读；
     传入会被 Schema 层 extra="forbid" 拦截 → 422。
@@ -150,7 +150,7 @@ async def delete_knowledge_base(
 ) -> ApiResponse[None]:
     """完全清理知识库及其全部资源（KB-05）。
 
-    严格按 PRD 顺序：Milvus drop → PG delete → Neo4j delete（S5 接通）。
+    严格按 PRD 顺序：Milvus drop → PG delete → Neo4j delete。
     不可撤销，建议前端二次确认。
     """
     await kb_service.delete_kb(db, kb_id)

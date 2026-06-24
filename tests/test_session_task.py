@@ -1,4 +1,4 @@
-"""V1.5 S4 会话标题/摘要异步任务单测（mock 所有外部 IO）。
+"""会话标题/摘要异步任务单测（mock 所有外部 IO）。
 
 覆盖：
 - _clean_title / _clean_summary：LLM 输出清洗

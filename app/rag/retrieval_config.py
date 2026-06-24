@@ -1,4 +1,4 @@
-"""V2.0 三层配置合并（HRE-06）。
+"""三层配置合并（HRE-06）。
 
 PRD §HRE-06 要求：检索行为通过统一的配置结构控制，支持 KB 级默认值 + API 单次覆盖。
 合并优先级：
@@ -39,7 +39,7 @@ class ResolvedRetrievalOptions:
     reranker_enable: bool
     query_rewrite: str  # "none" / "hyde" / "multi_query"
     enable_graph_rag: bool
-    enable_faithfulness_check: bool  # T9：答案自检（CHC-04）
+    enable_faithfulness_check: bool  # 答案自检（CHC-04）
     rrf_k: int
     rerank_top_n: int
 
@@ -111,7 +111,7 @@ def resolve_options(
         settings.graph_rag_enable,
     )
 
-    # T9：答案自检（CHC-04）
+    # 答案自检（CHC-04）
     enable_faithfulness_check = _pick(
         options.enable_faithfulness_check,
         kb_cfg,

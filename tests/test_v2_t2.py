@@ -1,4 +1,4 @@
-"""V2.0 T2 阶段单测（混合检索引擎验收）。
+"""混合检索引擎验收单测。
 
 覆盖：
 1. V2 Schema BM25 Function + enable_analyzer
@@ -6,7 +6,7 @@
 3. RRF 降级策略
 4. 格式化输出
 5. ingest_task Step 10 确认步骤
-6. V1.5 零回归
+6. 零回归
 """
 
 import uuid
@@ -303,7 +303,7 @@ class TestHybridSearch:
     async def test_hybrid_search_total_failure_raises(self):
         """单 collection hybrid + fallback 都失败 → 抛 RuntimeError（AGT-04）。
 
-        P1-8：retriever 不再静默吞异常。让上层（端点 / Agent tool_node）兜底，
+        retriever 不再静默吞异常。让上层（端点 / Agent tool_node）兜底，
         从而触发 ReAct 错误反思链路（PRD AGT-04）。
         """
         from app.rag.hybrid_retriever import hybrid_search

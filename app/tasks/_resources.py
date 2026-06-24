@@ -1,4 +1,4 @@
-"""Celery 入库任务的资源工厂（V1.5 S3.2 决策：每任务新建 + 断）。
+"""Celery 入库任务的资源工厂（S3.2 决策：每任务新建 + 断）。
 
 为什么不复用 app.db.session / app.rag.milvus_client / app.kg.neo4j_client 的全局单例？
 - 全局单例是为 FastAPI 进程设计：进程内长生命周期、随 lifespan 一次性 init/close

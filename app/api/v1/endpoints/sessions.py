@@ -1,6 +1,6 @@
-"""会话端点（V1.0 API-01 + V1.5 SES-01~08）。
+"""会话端点（API-01 + SES-01~08）。
 
-V1.5 起所有响应包成 `ApiResponse[T]`（PRD §7.1）；4xx 错误由 BusinessError 统一翻译。
+所有响应包成 `ApiResponse[T]`（PRD §7.1）；4xx 错误由 BusinessError 统一翻译。
 """
 
 import logging
@@ -39,7 +39,7 @@ async def create_session(
     db: DBSessionDep,
     body: SessionCreateRequest | None = None,
 ) -> ApiResponse[SessionDetail]:
-    """创建一个新的对话会话（V1.0 API-01 / V1.5 SES-01）。
+    """创建一个新的对话会话（API-01 / SES-01）。
 
     Body 可选；不传或不带 title → title 字段为 null（待 SES-07 异步任务生成）。
     """
@@ -63,7 +63,7 @@ async def list_sessions(
     page: int = Query(1, ge=1, description="页码（从 1 起）"),
     page_size: int = Query(20, ge=1, le=100, description="每页条数（1~100）"),
 ) -> ApiResponse[SessionListResponse]:
-    """分页查询会话列表（V1.5 SES-02），按 updated_at 倒序。"""
+    """分页查询会话列表（SES-02），按 updated_at 倒序。"""
     items, total = await session_service.list_sessions(db, page=page, page_size=page_size)
     payload = SessionListResponse(
         items=[SessionListItem.from_orm_session(s) for s in items],
@@ -84,7 +84,7 @@ async def list_sessions(
 async def get_session_detail(
     session_id: uuid.UUID, db: DBSessionDep
 ) -> ApiResponse[SessionDetail]:
-    """查询会话详情（V1.5 SES-03）。不存在返回 404 + code=40400。"""
+    """查询会话详情（SES-03）。不存在返回 404 + code=40400。"""
     session = await session_service.get_session_or_raise(db, session_id)
     return ApiResponse[SessionDetail].success(
         SessionDetail.from_orm_session(session)
@@ -103,7 +103,7 @@ async def update_session(
     body: SessionUpdateRequest,
     db: DBSessionDep,
 ) -> ApiResponse[SessionDetail]:
-    """更新会话标题（V1.5 SES-04）。仅 title 字段可改，传其他字段会被 Pydantic 拦截。"""
+    """更新会话标题（SES-04）。仅 title 字段可改，传其他字段会被 Pydantic 拦截。"""
     session = await session_service.update_session_title(
         db, session_id, title=body.title
     )
@@ -123,7 +123,7 @@ async def update_session(
 async def delete_session(
     session_id: uuid.UUID, db: DBSessionDep
 ) -> ApiResponse[None]:
-    """物理删除会话及其全部消息（V1.5 SES-05）。关联 Milvus / Neo4j 数据不受影响。"""
+    """物理删除会话及其全部消息（SES-05）。关联 Milvus / Neo4j 数据不受影响。"""
     await session_service.delete_session(db, session_id)
     logger.info("会话已删除: id=%s", session_id)
     return ApiResponse[None].success(None, message="会话已删除")
@@ -144,7 +144,7 @@ async def list_session_messages(
         None, description="游标：返回该消息 ID 之前（更早）的消息"
     ),
 ) -> ApiResponse[MessageListResponse]:
-    """分页返回历史消息（V1.5 SES-06），按 created_at 正序。"""
+    """分页返回历史消息（SES-06），按 created_at 正序。"""
     items, has_more, next_before = await session_service.list_session_messages(
         db, session_id, limit=limit, before=before
     )
@@ -173,7 +173,7 @@ class SummarizeResponse(BaseModel):
 async def trigger_session_summary(
     session_id: uuid.UUID, db: DBSessionDep
 ) -> ApiResponse[SummarizeResponse]:
-    """主动触发会话摘要生成（V1.5 SES-08 / TASK-05）。
+    """主动触发会话摘要生成（SES-08 / TASK-05）。
 
     立即返回 202 Accepted + task_id；后台异步把全量 messages 拼成 prompt 调
     LLM 生成 200 字以内摘要，写到 ChatSession.summary + summarized_at。

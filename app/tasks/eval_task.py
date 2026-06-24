@@ -1,4 +1,4 @@
-"""RAGAS 评估异步任务（V2.0 EVA-01/02，T11 阶段）。
+"""RAGAS 评估异步任务（EVA-01/02）。
 
 【架构约定】（与 session_task / ingest_task 一致）：
 - @celery_app.task 同步壳；核心 async def _main；体内只 asyncio.run 一次

@@ -1,4 +1,4 @@
-"""V2.0 UQA-04 Reranker 子接口 Schema（POST /api/v2/rerank）。"""
+"""UQA-04 Reranker 子接口 Schema（POST /api/v2/rerank）。"""
 
 from __future__ import annotations
 

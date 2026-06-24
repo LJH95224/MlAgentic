@@ -1,6 +1,6 @@
 """日志初始化。
 
-V1.0 仅做最基础的 stdlib logging 配置，后续可替换为 structlog / loguru。
+仅做最基础的 stdlib logging 配置，后续可替换为 structlog / loguru。
 """
 
 import logging

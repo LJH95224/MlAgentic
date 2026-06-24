@@ -1,6 +1,6 @@
-"""会话接口测试（V1.0 API-01；V1.5 已包统一响应格式）。
+"""会话接口测试（API-01；已包统一响应格式）。
 
-V1.5 改造（2026-06-11）：fixture 从重型 `client`（依赖 Milvus + Neo4j + LLM）
+改造（2026-06-11）：fixture 从重型 `client`（依赖 Milvus + Neo4j + LLM）
 改为轻量 `pg_client`（仅 PG），因为这些用例本就只测 POST /sessions 和 /health，
 跟 Milvus / Neo4j 无关。改完后 CI 不需要起 Neo4j 也能跑全量集成测试。
 
@@ -28,7 +28,7 @@ async def test_create_session(client):
 
     assert resp.status_code == 201
     body = resp.json()
-    # V1.5 起统一响应格式（PRD §7.1）
+    # 统一响应格式（PRD §7.1）
     assert body["code"] == error_codes.SUCCESS
     assert body["message"] == "success"
     data = body["data"]
@@ -52,7 +52,7 @@ async def test_create_session_returns_unique_ids(client):
 
 
 async def test_health(client):
-    """健康检查不依赖 DB，应始终通过；V1.5 仍按原裸 JSON 返回（不属于 v1 业务接口）。"""
+    """健康检查不依赖 DB，应始终通过；仍按原裸 JSON 返回（不属于 v1 业务接口）。"""
     resp = await client.get("/health")
     assert resp.status_code == 200
     assert resp.json() == {"status": "ok"}

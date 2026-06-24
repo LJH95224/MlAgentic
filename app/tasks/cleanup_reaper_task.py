@@ -1,4 +1,4 @@
-"""外存清理失败文件 / KB 的补偿周期任务（A P1-9）。
+"""外存清理失败文件 / KB 的补偿周期任务。
 
 【问题背景】
 KB 删除（kb_service.delete_kb）与 KbFile 删除（kb_file_service.delete_file）的主路径
@@ -8,7 +8,7 @@ KB 删除（kb_service.delete_kb）与 KbFile 删除（kb_file_service.delete_fi
 - 但没人"再试一次"，pending_cleanup 就永远卡在那里
 
 【方案】
-本任务与 reaper_task（P1-11）共用 Celery beat 框架，独立调度：
+本任务与 reaper_task 共用 Celery beat 框架，独立调度：
 
 1. 扫 `KnowledgeBase.status = pending_cleanup AND retry_count < max`，重试 Milvus drop + Neo4j 删
 2. 扫 `KbFile.status = pending_cleanup AND retry_count < max`，重试 Milvus delete + Neo4j 删
@@ -21,7 +21,7 @@ KB 删除（kb_service.delete_kb）与 KbFile 删除（kb_file_service.delete_fi
 - reaper_task 的补偿动作是 `_mark_failed_safe`（清残留 + 标 failed），这里是标 "pending_cleanup" 的再重试
 - 合并会引入"一把扫两张表"的复杂度和嵌套条件，不如各管各
 
-P1-9 · 2026-06-22
+2026-06-22
 """
 
 from __future__ import annotations
@@ -241,7 +241,7 @@ async def _reap_one_file(
                     .values(
                         cleanup_retry_count=KbFile.cleanup_retry_count + 1,
                         error_message=(
-                            "[P1-9-reaper] 外存清理重试失败 "
+                            "[reaper] 外存清理重试失败 "
                             f"(Milvus={'OK' if milvus_ok else 'FAIL'}, "
                             f"Neo4j={'OK' if neo4j_ok else 'FAIL'})"
                         ),

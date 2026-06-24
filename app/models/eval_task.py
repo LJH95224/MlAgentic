@@ -1,4 +1,4 @@
-"""eval_tasks 表：V2.0 RAGAS 评估任务记录（EVA-01/02/03）。
+"""eval_tasks 表：RAGAS 评估任务记录（EVA-01/02/03）。
 
 每次评估任务对应一组测试问题 → RAG 系统 → 收集答案 → RAGAS 打分。
 
@@ -6,7 +6,7 @@
 - 评估集（eval_dataset）以 JSONB 存储，内含 question / ground_truth / contexts
 - 评估结果（eval_result）以 JSONB 存储，内含 RAGAS 各指标分数
 - status 与 KbFile 同款枚举（pending / processing / completed / failed）
-- T11 阶段才接通，T0 仅建表
+- 评估期才接通，初始仅建表
 """
 
 import uuid
@@ -33,7 +33,7 @@ EVAL_STATUS_CHOICES = (
 
 
 class EvalTask(Base):
-    """RAGAS 评估任务记录（V2.0 EVA-01/02/03）。"""
+    """RAGAS 评估任务记录（EVA-01/02/03）。"""
 
     __tablename__ = "eval_tasks"
 

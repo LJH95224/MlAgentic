@@ -1,4 +1,4 @@
-"""V2.0 UQA-02 纯检索子接口 Schema（POST /api/v2/retrieve）。"""
+"""UQA-02 纯检索子接口 Schema（POST /api/v2/retrieve）。"""
 
 from __future__ import annotations
 

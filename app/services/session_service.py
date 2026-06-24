@@ -1,4 +1,4 @@
-"""会话相关的业务逻辑（V1.0 API-01 + V1.5 SES-01~06）。
+"""会话相关的业务逻辑（API-01 + SES-01~06）。
 
 设计原则：
 - service 层只做 DB 操作 + 业务规则校验；不构造 ApiResponse、不调 HTTPException
@@ -31,7 +31,7 @@ async def create_session(
 ) -> ChatSession:
     """创建一个新会话并落库。
 
-    V1.0：无 title 参数；V1.5 起支持可选 title。
+    title 可选；不传则留空，后续由异步任务生成。
     """
     session = ChatSession(title=title)
     db.add(session)
@@ -48,7 +48,7 @@ async def get_session(
 ) -> ChatSession | None:
     """按 ID 获取会话；不存在返回 None。
 
-    V1.0 至今的契约：上层（chat endpoint）按 None 自行处理 404。
+    至今的契约：上层（chat endpoint）按 None 自行处理 404。
     """
     stmt = select(ChatSession).where(ChatSession.id == session_id)
     result = await db.execute(stmt)
@@ -60,7 +60,7 @@ async def get_session_or_raise(
 ) -> ChatSession:
     """按 ID 获取会话；不存在抛 BusinessError(NOT_FOUND)。
 
-    新 V1.5 endpoint 一律走这个，让 BusinessError handler 出统一 404 响应。
+    endpoint 一律走这个，让 BusinessError handler 出统一 404 响应。
     """
     session = await get_session(db, session_id)
     if session is None:

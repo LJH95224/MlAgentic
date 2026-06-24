@@ -1,4 +1,4 @@
-"""V2.0 T3 阶段单测（可观测性 Trace 验收）。
+"""可观测性 Trace 验收单测。
 
 覆盖：
 1. Tracer 上下文管理器生命周期
@@ -6,8 +6,8 @@
 3. trace_enable=False 时短路
 4. TraceStep 数据类
 5. Trace 查询接口（mock DB）
-6. V2 Schema 结构
-7. V2 router 挂载
+6. Schema 结构
+7. router 挂载
 """
 
 import asyncio

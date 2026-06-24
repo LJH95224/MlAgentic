@@ -1,4 +1,4 @@
-"""统一响应格式（V1.5 PRD §7.1 全覆盖）。
+"""统一响应格式（PRD §7.1 全覆盖）。
 
 PRD 要求所有 REST 接口返回结构 `{code, message, data}`：
 
@@ -16,7 +16,7 @@ PRD 要求所有 REST 接口返回结构 `{code, message, data}`：
 - 错误码集中在 `app.api.error_codes`，HTTP 状态码与业务 code 的映射由
   `app/api/exceptions.py::http_status_for_code()` 完成
 - SSE 流式响应（/chat/stream）**不二次包装** —— SSE 协议本身已经是结构化事件流，
-  V1.0 已有的 `event/type/...` 字段保持不变
+  已有的 `event/type/...` 字段保持不变
 
 注意：FastAPI 的请求体校验失败（422）也走 `app/api/exceptions.py::validation_handler`
 统一翻译成 `ApiResponse.fail(40001, ...)`，前端只需识别 `code != 0` 即为失败。

@@ -1,4 +1,4 @@
-"""统一异常处理（V1.5 PRD §7.1 / §7.2）。
+"""统一异常处理（PRD §7.1 / §7.2）。
 
 把不同来源的失败统一翻译成 `ApiResponse.fail(code, message)` + 正确的 HTTP 状态码：
 
@@ -10,8 +10,8 @@
 | 未捕获 `Exception` | 500 + INTERNAL_ERROR；message = 通用文案；详情写日志 |
 
 设计要点：
-- `register_exception_handlers(app)` 是显式注册函数，**S1.0b 才挂到 app**，
-  S1.0 当前只暴露符号，避免破坏 V1.0 已有的"直接返回 Pydantic"路径
+- `register_exception_handlers(app)` 是显式注册函数，需挂到 app，
+  当前只暴露符号，避免破坏已有的"直接返回 Pydantic"路径
 - 业务层永远 `raise BusinessError(...)`，绝不手写 `JSONResponse({"code":...})`
 - 所有 response body 都用 `ApiResponse.fail()` 构造，结构由 Pydantic 保证
 """
@@ -63,15 +63,15 @@ HTTP_STATUS_BY_CODE: dict[int, int] = {
     error_codes.SUCCESS: HTTPStatus.OK,
     error_codes.PARAM_INVALID: HTTPStatus.BAD_REQUEST,            # 400
     error_codes.IMMUTABLE_FIELD: HTTPStatus.BAD_REQUEST,          # 400
-    error_codes.QUERY_REWRITE_INVALID: HTTPStatus.BAD_REQUEST,    # 400 (V2.0 HRE-01)
-    error_codes.EVAL_DATASET_EMPTY: HTTPStatus.BAD_REQUEST,       # 400 (V2.0 EVA-01)
-    error_codes.EVAL_DATASET_TOO_LARGE: HTTPStatus.BAD_REQUEST,   # 400 (V2.0 EVA-01)
+    error_codes.QUERY_REWRITE_INVALID: HTTPStatus.BAD_REQUEST,    # 400 (HRE-01)
+    error_codes.EVAL_DATASET_EMPTY: HTTPStatus.BAD_REQUEST,       # 400 (EVA-01)
+    error_codes.EVAL_DATASET_TOO_LARGE: HTTPStatus.BAD_REQUEST,   # 400 (EVA-01)
     error_codes.NOT_FOUND: HTTPStatus.NOT_FOUND,                  # 404
     error_codes.NAME_CONFLICT: HTTPStatus.CONFLICT,               # 409
     error_codes.FILE_TOO_LARGE: HTTPStatus.REQUEST_ENTITY_TOO_LARGE,  # 413
     error_codes.UNSUPPORTED_MEDIA: HTTPStatus.UNSUPPORTED_MEDIA_TYPE,  # 415
     error_codes.EMBEDDING_DIM_MISMATCH: HTTPStatus.UNPROCESSABLE_ENTITY,  # 422
-    error_codes.CONTEXT_CHUNKS_EMPTY: HTTPStatus.UNPROCESSABLE_ENTITY,  # 422 (V2.0 UQA-03)
+    error_codes.CONTEXT_CHUNKS_EMPTY: HTTPStatus.UNPROCESSABLE_ENTITY,  # 422 (UQA-03)
     error_codes.INTERNAL_ERROR: HTTPStatus.INTERNAL_SERVER_ERROR,  # 500
     error_codes.CELERY_UNAVAILABLE: HTTPStatus.SERVICE_UNAVAILABLE,  # 503
 }
@@ -83,7 +83,7 @@ def http_status_for_code(code: int) -> int:
 
 
 # HTTP 4xx/5xx → 业务 code 的反向映射（用于 HTTPException 翻译）
-# 只在 V1.0 的老代码或第三方库直接 raise HTTPException 时生效
+# 只在老代码或第三方库直接 raise HTTPException 时生效
 _CODE_BY_HTTP_STATUS: dict[int, int] = {
     HTTPStatus.BAD_REQUEST: error_codes.PARAM_INVALID,
     HTTPStatus.NOT_FOUND: error_codes.NOT_FOUND,
@@ -171,14 +171,14 @@ async def unhandled_exception_handler(_: Request, exc: Exception) -> JSONRespons
     )
 
 
-# ───────── 注册入口（S1.0b 才挂到 app） ─────────
+# ───────── 注册入口 ─────────
 
 
 def register_exception_handlers(app: FastAPI) -> None:
     """把全套 handler 注册到 FastAPI app。
 
-    本函数在 S1.0 阶段**不被调用**，仅暴露符号供 S1.0b 与单测使用，
-    避免在统一响应改造完成前破坏 V1.0 已有 endpoint 的返回结构。
+    本函数当前**不被调用**，仅暴露符号供单测使用，
+    避免在统一响应改造完成前破坏已有 endpoint 的返回结构。
     """
     app.add_exception_handler(BusinessError, business_error_handler)
     app.add_exception_handler(StarletteHTTPException, http_exception_handler)

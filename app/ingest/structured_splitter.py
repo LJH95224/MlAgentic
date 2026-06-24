@@ -1,16 +1,17 @@
-"""结构感知文本切片器（V2.0 IDP-02）。
+"""结构感知文本切片器（IDP-02）。
 
-与 V1.5 的 `splitter.py`（纯文本切片）不同，V2.0 基于 `StructuredBlock` 的元数据
+与 `splitter.py`（纯文本切片）不同，本模块基于 `StructuredBlock` 的元数据
 做智能切片，保留结构信息。
 
 切片优先级（PRD §IDP-02）：
 1. 代码块 → 整块保留，不切断
 2. 表格块 → 整块保留，不切断
-3. 标题 + 紧随的段落 → 组合到一个 chunk
-4. 普通段落 → 超长时递归切分，兜底策略
+3. 列表块 → 整块保留，不切断
+4. 标题 + 紧随的段落 → 组合到一个 chunk
+5. 普通段落 → 超长时递归切分，兜底策略
 
 每个输出 `StructuredChunk` 携带 heading_path / block_type / page_number / position_index
-等元数据，后续写入 Milvus V2 Schema 时直接映射。
+等元数据，后续写入 Milvus Schema 时直接映射。
 """
 
 from __future__ import annotations
@@ -30,10 +31,10 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class StructuredChunk:
-    """V2.0 结构感知切片产物（IDP-02）。
+    """结构感知切片产物（IDP-02）。
 
-    与 V1.5 的 Chunk 相比，多了结构元数据字段。
-    这些字段在写入 Milvus V2 Schema 时直接映射到对应列。
+    与 Chunk 相比，多了结构元数据字段。
+    这些字段在写入 Milvus Schema 时直接映射到对应列。
     """
 
     chunk_id: str  # uuid，全局唯一
@@ -43,8 +44,8 @@ class StructuredChunk:
     block_type: Literal["paragraph", "heading", "table", "code", "list", "mixed"]
     page_number: int | None  # 页码
     position_index: int  # 文档内序号（取 chunk 首个 block 的）
-    parent_chunk_id: str | None  # 父 chunk ID（双层索引，T7 才用）
-    is_summary: bool  # 是否为摘要 chunk（T7 才用）
+    parent_chunk_id: str | None  # 父 chunk ID（双层索引用）
+    is_summary: bool  # 是否为摘要 chunk（双层索引用）
 
 
 def _make_chunk_id() -> str:
@@ -414,7 +415,7 @@ def _split_long_text(
             start += step - overlap
         return result
 
-    # 中文场景分隔符（与 V1.5 splitter.py 同款）
+    # 中文场景分隔符（与 splitter.py 同款）
     separators = [
         "\n\n", "\n",
         "。", "！", "？", "；",

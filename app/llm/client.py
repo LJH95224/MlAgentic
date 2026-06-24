@@ -238,7 +238,7 @@ async def astream(
             }]
         }
 
-    3.3 阶段 LangGraph 的 ReAct 循环会通过此接口获取打字机式文本流。
+    LangGraph 的 ReAct 循环会通过此接口获取打字机式文本流。
     """
     settings = get_settings()
     kwargs = _build_kwargs(messages, tools, **extra, stream=True)

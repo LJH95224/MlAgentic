@@ -1,14 +1,14 @@
-"""A P1-9 + B M-06 联合单测。
+"""联合单测。
 
 覆盖：
-- P1-9 模型字段：KbFile cleanup_retry_count / KnowledgeBase updated_at + cleanup_retry_count
-- P1-9 Celery 注册：cleanup_reaper_task 在 tasks + beat_schedule
-- P1-9 delete_file 补偿分支：全成功 / 部分失败 / 全失败
-- P1-9 delete_kb 补偿分支：同款
-- P1-9 cleanup_reaper_task 扫描 + 重试逻辑
-- P1-9 listing 过滤：deleting / pending_cleanup 不可见
-- B M-06 _build_filter_expr kb_ids 参数
-- B M-06 hybrid_retriever 传参
+- 模型字段：KbFile cleanup_retry_count / KnowledgeBase updated_at + cleanup_retry_count
+- Celery 注册：cleanup_reaper_task 在 tasks + beat_schedule
+- delete_file 补偿分支：全成功 / 部分失败 / 全失败
+- delete_kb 补偿分支：同款
+- cleanup_reaper_task 扫描 + 重试逻辑
+- listing 过滤：deleting / pending_cleanup 不可见
+- _build_filter_expr kb_ids 参数
+- hybrid_retriever 传参
 """
 
 from __future__ import annotations
@@ -38,7 +38,7 @@ from app.models.knowledge_base import (
 def test_kbfile_has_cleanup_retry_count():
     """KbFile 必须有 cleanup_retry_count 字段。"""
     columns = {c.name for c in KbFile.__table__.columns}
-    assert "cleanup_retry_count" in columns, "KbFile 缺 cleanup_retry_count（P1-9）"
+    assert "cleanup_retry_count" in columns, "KbFile 缺 cleanup_retry_count"
 
 
 def test_kbfile_cleanup_retry_count_defaults_zero():
@@ -49,10 +49,10 @@ def test_kbfile_cleanup_retry_count_defaults_zero():
 
 
 def test_kb_has_updated_at_and_cleanup_retry_count():
-    """KnowledgeBase 必须有 P1-9 新增的两个字段。"""
+    """KnowledgeBase 必须有新增的两个字段。"""
     columns = {c.name for c in KnowledgeBase.__table__.columns}
-    assert "updated_at" in columns, "KnowledgeBase 缺 updated_at（P1-9）"
-    assert "cleanup_retry_count" in columns, "KnowledgeBase 缺 cleanup_retry_count（P1-9）"
+    assert "updated_at" in columns, "KnowledgeBase 缺 updated_at"
+    assert "cleanup_retry_count" in columns, "KnowledgeBase 缺 cleanup_retry_count"
 
 
 def test_kb_updated_at_has_server_default_and_onupdate():
@@ -459,7 +459,7 @@ def test_hybrid_retriever_imports_build_filter_expr():
 
 
 def test_config_cleanup_reaper_fields_exist():
-    """Settings 必须有 P1-9 三个配置项。"""
+    """Settings 必须有三个配置项。"""
     from app.core.config import get_settings
 
     s = get_settings()

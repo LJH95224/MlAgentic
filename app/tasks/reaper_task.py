@@ -1,4 +1,4 @@
-"""卡死 processing 文件回收周期任务（A P1-11）。
+"""卡死 processing 文件回收周期任务。
 
 【问题】
 `kb_files.status` 状态机：``pending → processing → completed / failed``。但有几种路径

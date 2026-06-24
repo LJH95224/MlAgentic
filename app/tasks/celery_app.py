@@ -1,4 +1,4 @@
-"""Celery 应用单例（V1.5 PRD §3.4 TASK-01）。
+"""Celery 应用单例（PRD §3.4 TASK-01）。
 
 设计要点：
 - broker / backend 均指向 Redis（缺省复用 REDIS_URL，可通过 CELERY_BROKER_URL /
@@ -8,7 +8,7 @@
 - task_serializer="json"：禁用 pickle，避免 RCE 风险
 - include：显式列出包含任务的模块，让 worker 启动时 import 完成注册
 - timezone="Asia/Shanghai" + enable_utc=False：方便日志对时
-- beat_schedule：周期任务编排（V2.0 P1-11 引入"卡死文件回收"）
+- beat_schedule：周期任务编排（P1-11 引入"卡死文件回收"）
 
 启动命令（Windows 开发态）：
     celery -A app.tasks.celery_app worker --pool=solo -l info
@@ -39,11 +39,11 @@ _TASK_MODULES: list[str] = [
     "app.tasks.ingest_task",
     # S4 阶段（2026-06-11 起）：会话标题 / 摘要异步生成
     "app.tasks.session_task",
-    # T11 阶段（2026-06-16 起）：RAGAS 评估
+    # 阶段：RAGAS 评估
     "app.tasks.eval_task",
-    # P1-11（2026-06-22 起）：卡死 processing 文件回收周期任务
+    # 阶段：卡死 processing 文件回收周期任务
     "app.tasks.reaper_task",
-    # P1-9（2026-06-22 起）：KB / KbFile 外存清理补偿周期任务
+    # 阶段：KB / KbFile 外存清理补偿周期任务
     "app.tasks.cleanup_reaper_task",
 ]
 
@@ -83,7 +83,7 @@ celery_app.conf.update(
     # 注意：必须额外启动 `celery -A app.tasks.celery_app beat` 进程才生效，
     # worker 只执行被入队的任务，自身不调度。
     beat_schedule={
-        # P1-11 卡死 processing 文件回收
+        # 卡死 processing 文件回收
         # interval 由 INGEST_REAPER_INTERVAL_S 控制（默认 600s = 10min）
         "reap-stale-processing-files": {
             "task": "app.tasks.reaper_task.reap_stale_processing_files",
@@ -92,7 +92,7 @@ celery_app.conf.update(
                 "expires": _settings.ingest_reaper_interval_s,
             },
         },
-        # P1-9 删除补偿周期任务
+        # 删除补偿周期任务
         # interval 由 CLEANUP_REAPER_INTERVAL_S 控制（默认 300s = 5min）
         "reap-pending-cleanup": {
             "task": "app.tasks.cleanup_reaper_task.reap_pending_cleanup",

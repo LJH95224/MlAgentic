@@ -1,7 +1,7 @@
-"""V2.0 Query 侧 NER + 图谱锚定（HRE-02）。
+"""Query 侧 NER + 图谱锚定（HRE-02）。
 
 PRD §HRE-02 描述：检索开始前从 Query 抽实体 → Neo4j 查邻接实体 → 注入 Milvus
-``entity_tags`` 标量过滤，是 V2.0 相对 V1.5 的核心 Graph RAG 链路。
+``entity_tags`` 标量过滤，是 Graph RAG 的核心链路。
 
 设计要点：
 1. **薄封装** [app/kg/ner.py](../kg/ner.py) ``run_ner``：prompt 不动；后续如需切换更轻量的
@@ -153,7 +153,7 @@ async def anchor_to_graph(
 
     Args:
         entities: NER 输出的实体列表 ``[{"name":..., "type":...}]``；空时直接返 []
-        kb_ids: KB 隔离过滤列表（V1.5 KB-06 已支持）；None 表示不过滤
+        kb_ids: KB 隔离过滤列表（KB-06 已支持）；None 表示不过滤
 
     Returns:
         ``entity_tags`` 列表，可直接传给 ``hybrid_search(entity_tags=...)``；

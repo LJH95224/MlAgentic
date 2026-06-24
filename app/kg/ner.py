@@ -1,6 +1,6 @@
 """LLM Prompt 驱动的通用命名实体识别（KG-05）。
 
-V1.0 阶段实现路线：
+实现路线：
 - 复用 3.2 的 litellm.acompletion，绕开 LangGraph 走纯调用
 - 强制 JSON 结构化输出（response_format={"type": "json_object"}）
 - 实体类型固定 5 类：PERSON / LOCATION / ORG / TIME / OTHER（用户决策）

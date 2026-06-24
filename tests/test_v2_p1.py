@@ -1,4 +1,4 @@
-"""V2.0 P1 阶段单测（T4 Reranker + T5 Citation + T6 /v2/query 验收）。
+"""P1 阶段单测（Reranker + Citation + /v2/query 验收）。
 
 覆盖：
 1. NoopReranker / LiteLLMReranker 逻辑
@@ -246,7 +246,7 @@ class TestGetReranker:
 
 
 # ════════════════════════════════════════════════════════════════
-# 4. Citation 模块（T5）
+# 4. Citation 模块
 # ════════════════════════════════════════════════════════════════
 
 
@@ -305,7 +305,7 @@ class TestCitation:
 
 
 # ════════════════════════════════════════════════════════════════
-# 5. /v2/query 端点 + Schemas（T6）
+# 5. /v2/query 端点 + Schemas
 # ════════════════════════════════════════════════════════════════
 
 
@@ -315,7 +315,7 @@ class TestV2QuerySchemas:
 
         req = QueryRequest(query="什么是台风？")
         assert req.query == "什么是台风？"
-        # T8 起 top_k 默认为 None（让 resolve_options 三层合并兜到 5）
+        # top_k 默认为 None（让 resolve_options 三层合并兜到 5）
         assert req.options.top_k is None
 
     def test_query_request_with_options(self):
@@ -373,16 +373,16 @@ class TestV2QueryEndpoint:
         v2_paths = [p for p in all_paths if "/api/v2" in p]
         assert len(v2_paths) > 0, "/api/v2 路由未注册"
         # 至少有 traces 和 query
-        assert any("query" in p for p in v2_paths) or True  # T6 可能还没挂
+        assert any("query" in p for p in v2_paths) or True
 
 
 # ════════════════════════════════════════════════════════════════
-# 6. P1 端到端贯通（hybrid_search → rerank → context → LLM → citation）
+# 6. 端到端贯通（hybrid_search → rerank → context → LLM → citation）
 # ════════════════════════════════════════════════════════════════
 
 
 class TestV2QueryE2E:
-    """T4+T5+T6 端到端链路贯通测试（全程 mock 外部服务）。
+    """端到端链路贯通测试（全程 mock 外部服务）。
 
     覆盖：从 v2_query 入口到 QueryResponse 返回的完整路径，
     确保 hybrid_search / Tracer / build_context / LLM / parse_citations
@@ -426,7 +426,7 @@ class TestV2QueryE2E:
             "热带气旋[1] 主要发生在西北太平洋。"
         )
 
-        # patch 链路依赖：hybrid_search / Tracer / litellm.acompletion / T8 新增 NER+图谱
+        # patch 链路依赖：hybrid_search / Tracer / litellm.acompletion / NER+图谱
         with patch(
             "app.api.v2.endpoints.query.hybrid_search",
             new=AsyncMock(return_value=mock_results),
@@ -464,7 +464,7 @@ class TestV2QueryE2E:
             # 入参 + 调用
             req = QueryRequest(query="什么是台风？")
             mock_db = MagicMock()
-            mock_db.get = AsyncMock(return_value=None)  # T8: KB 加载
+            mock_db.get = AsyncMock(return_value=None)  # KB 加载
             mock_db.add = MagicMock()
             mock_db.commit = AsyncMock()
             mock_db.rollback = AsyncMock()

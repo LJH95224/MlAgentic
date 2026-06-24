@@ -1,4 +1,4 @@
-"""V2.0 RAGAS 评估端点（EVA-01/02/03，T11 阶段）。
+"""RAGAS 评估端点（EVA-01/02/03）。
 
 端点：
 - POST /api/v2/knowledge-bases/{kb_id}/evaluate            创建评估

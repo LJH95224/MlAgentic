@@ -1,4 +1,4 @@
-"""KB 文件业务逻辑（V1.5 PRD §3.3 FILE-01~05）。
+"""KB 文件业务逻辑（PRD §3.3 FILE-01~05）。
 
 设计要点：
 - FILE-01 上传：边读边量 size（防 Content-Length 欺骗）→ 写盘 → PG 写元数据
@@ -6,7 +6,6 @@
 - 允许同名文件：磁盘路径用 file_id 隔离 `{UPLOAD_DIR}/{kb_id}/{file_id}/{filename}`
 - 文件大小校验在 service 层：用 SpooledTemporaryFile + chunk 读，超限立即抛
 - FILE-04 / FILE-05 删除/重建：先 revoke Celery 任务 → Milvus → Neo4j → PG → 磁盘
-  - S3.1 阶段 Milvus / Neo4j 清理走 TODO（S3.2 / S5 接通），先实现 PG + 磁盘
 """
 
 import logging
@@ -156,7 +155,7 @@ async def upload_file(
     if not is_supported_filename(filename):
         raise BusinessError(
             error_codes.UNSUPPORTED_MEDIA,
-            f"不支持的文件格式: {filename}（V1.5 仅支持 .pdf / .docx / .md / .txt）",
+            f"不支持的文件格式: {filename}（仅支持 .pdf / .docx / .md / .txt）",
         )
     # MIME 二次校验：不匹配仅 warning 不阻断
     if not check_mime_compatibility(filename, declared_mime):
@@ -439,7 +438,7 @@ async def _cleanup_neo4j_entities_for_file(
 async def delete_file(
     db: AsyncSession, kb_id: uuid.UUID, file_id: uuid.UUID
 ) -> None:
-    """删除文件及相关资源（FILE-04 + V2 hardening P1-9）。
+    """删除文件及相关资源（FILE-04 + hardening P1-9）。
 
     P1-9 改造：把"一次性硬删，外存失败就吞掉"改成"失败降级为补偿"：
 
@@ -535,14 +534,14 @@ async def delete_file(
 
 
 def _format_cleanup_failure_reason(*, milvus_ok: bool, neo4j_ok: bool) -> str:
-    """P1-9 把外存清理失败的位置打包成 error_message 文本。"""
+    """把外存清理失败的位置打包成 error_message 文本。"""
     failed = []
     if not milvus_ok:
         failed.append("Milvus")
     if not neo4j_ok:
         failed.append("Neo4j")
     return (
-        f"[P1-9] 外存清理失败 ({', '.join(failed)})；"
+        f"[reaper] 外存清理失败 ({', '.join(failed)})；"
         f"已转 pending_cleanup 等待 cleanup_reaper_task 周期补偿"
     )
 
@@ -555,7 +554,7 @@ async def reindex_file(
     步骤：
       1. 验证文件 + 磁盘文件存在；磁盘文件丢失 → 404 提示重新上传
       2. revoke 旧任务（若 processing）
-      3. Milvus 删旧切片 / Neo4j 删旧实体（S3.2 / S5 接通）
+      3. Milvus 删旧切片 / Neo4j 删旧实体
       4. KB.chunk_count -= old_chunk_count（重置计数）
       5. PG kb_files 状态重置：status=pending, progress=0, chunk_count=0,
          entity_count=0, error_message=None, completed_at=None
@@ -659,8 +658,7 @@ async def mark_file_failed(
 def remove_kb_upload_root(kb_id: uuid.UUID) -> None:
     """KB-05 删除知识库时调；清空该 KB 下所有上传文件目录。
 
-    S2 阶段还没调它（KB-05 只删 PG + Milvus），等 S3 上传真有文件后再在
-    kb_service.delete_kb 末尾追加这一步。
+    已在 kb_service.delete_kb 末尾调用。
     """
     settings = get_settings()
     root = Path(settings.upload_dir) / str(kb_id)

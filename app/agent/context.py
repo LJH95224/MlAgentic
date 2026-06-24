@@ -1,4 +1,4 @@
-"""请求级上下文变量（V1.5 KB-06）。
+"""请求级上下文变量（KB-06）。
 
 设计目的：把"本轮请求的 kb_ids"等"业务上下文"在不修改函数签名的情况下
 传递给深层调用（如 retriever / query_knowledge_graph 工具）。
@@ -19,7 +19,7 @@ import uuid
 from contextvars import ContextVar
 
 # 当前请求的 kb_ids 范围
-# - None：未设置（chat 接口未传 kb_ids 字段，走 V1.0 默认行为）
+# - None：未设置（chat 接口未传 kb_ids 字段，走默认行为）
 # - []：明确空（不查任何 KB）
 # - [...]：要查的 KB ID 列表
 _current_kb_ids: ContextVar[list[uuid.UUID] | None] = ContextVar(

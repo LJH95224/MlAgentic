@@ -1,4 +1,4 @@
-"""V2.0 OBS-03 聚合统计端点 GET /api/v2/analytics。
+"""OBS-03 聚合统计端点 GET /api/v2/analytics。
 
 从 query_analytics 快照表做 SQL 聚合，返回系统级统计数据。
 支持按时间范围和知识库过滤。单次 SQL 查询完成所有聚合。

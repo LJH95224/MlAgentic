@@ -1,4 +1,4 @@
-"""V2.0 混合检索引擎（HRE-03/04）：稠密向量 + BM25 + RRF 融合。
+"""混合检索引擎（HRE-03/04）：稠密向量 + BM25 + RRF 融合。
 
 核心功能：
 - 稠密向量检索（HNSW + COSINE）：语义相似度
@@ -12,7 +12,7 @@
 - 降级策略：bm25_enable=False 时退化为纯稠密向量检索
 - 异常策略：hybrid_search 失败时降级为纯向量检索
 
-被 V2 统一查询接口（T6 /v2/query）和 search_knowledge_base 工具调用。
+被统一查询接口（/v2/query）和 search_knowledge_base 工具调用。
 """
 
 from __future__ import annotations
@@ -92,7 +92,7 @@ async def hybrid_search(
     reranker_enable: bool = True,
     similarity_threshold: float | None = None,
 ) -> list[HybridSearchResult]:
-    """V2.0 混合检索：稠密向量 + BM25 + RRF 融合。
+    """混合检索：稠密向量 + BM25 + RRF 融合。
 
     Args:
         query: 检索自然语言查询
@@ -135,7 +135,7 @@ async def hybrid_search(
 
     # 拼过滤表达式
     # B M-06：把 contextvar current_kb_ids 序列化为字符串列表传入 _build_filter_expr
-    # 作为 kb_id 兜底过滤。None = 全局 collection（如 V1.0 默认），不加该子句。
+    # 作为 kb_id 兜底过滤。None = 不加该子句。
     filter_expr = _build_filter_expr(
         doc_type=doc_type,
         document_id=document_id,
@@ -419,7 +419,7 @@ def _parse_search_results(
 
 
 def format_hybrid_results(results: list[HybridSearchResult]) -> str:
-    """把混合检索结果格式化为对 LLM 友好的字符串（含 V2 结构信息）。"""
+    """把混合检索结果格式化为对 LLM 友好的字符串（含结构信息）。"""
     if not results:
         return "（检索无结果。可尝试换关键词或放宽过滤后重试。）"
 

@@ -1,4 +1,4 @@
-"""V2.0 UQA-03 纯生成子接口 POST /api/v2/generate。
+"""UQA-03 纯生成子接口 POST /api/v2/generate。
 
 接受开发者自定义的 context_chunks，跳过检索步骤，
 直接调 LLM 生成答案 + Citation 溯源 + 答案自检。

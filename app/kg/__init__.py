@@ -1,9 +1,9 @@
 """知识图谱模块（3.6 阶段引入，基于 Neo4j）。
 
-按新版 PRD：
+按 PRD：
 - 通过 Neo4j AsyncDriver 接入（连接配置写在 .env）
 - 节点：Entity（name + type 复合唯一）/ Document（document_id 唯一）
-- 关系：MENTIONED_IN（chunk_id 属性）/ RELATED_TO（V1.0 未抽取）
+- 关系：MENTIONED_IN（chunk_id 属性）/ RELATED_TO（未抽取）
 - 与 Milvus 通过 document_id 和 entity_tags 字段串联
 
 对外入口：

@@ -1,4 +1,4 @@
-"""LLM 网关模块（3.2 阶段：LiteLLM 统一接入层）。
+"""LLM 网关模块（LiteLLM 统一接入层）。
 
 对外核心接口：
   - acompletion(messages, tools?) -> dict        一次性返回

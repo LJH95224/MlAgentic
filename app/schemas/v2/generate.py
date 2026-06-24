@@ -1,4 +1,4 @@
-"""V2.0 UQA-03 纯生成子接口 Schema（POST /api/v2/generate）。"""
+"""UQA-03 纯生成子接口 Schema（POST /api/v2/generate）。"""
 
 from __future__ import annotations
 

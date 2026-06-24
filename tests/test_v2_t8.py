@@ -1,4 +1,4 @@
-"""V2.0 T8 · Query 改写 + Query NER + 三层配置合并 单测。
+"""Query 改写 + Query NER + 三层配置合并 单测。
 
 覆盖矩阵：
 - resolve_options 三层合并优先级（API > KB > settings）
@@ -9,7 +9,7 @@
 - KB schema retrieval_config 字段
 - 端到端 v2_query：HyDE / multi_query / Graph RAG / KB 配置覆盖
 
-mock 策略沿用 P1：patch hybrid_search / litellm.acompletion / Tracer / Neo4j driver，
+mock 策略：patch hybrid_search / litellm.acompletion / Tracer / Neo4j driver，
 全部跑 mock，无需真 DB / Milvus / Neo4j。
 """
 
@@ -446,7 +446,7 @@ class TestAnchorToGraph:
         # ok 的邻居正常收集（含 ok 起点 + 邻居）
         assert "ok" in r
         assert "邻居" in r
-        # broken 起点实体不再保留——T9 之后 Query NER 抽出但图谱不存在的实体不会硬塞 tags，
+        # broken 起点实体不再保留——Query NER 抽出但图谱不存在的实体不会硬塞 tags，
         # 否则下游 ARRAY_CONTAINS_ANY 硬过滤会反向把召回归零
         assert "broken" not in r
 

@@ -1,7 +1,7 @@
-"""V1.5 PostgreSQL 模型字段单测（S0 验收，纯结构校验，不连真库）。
+"""PostgreSQL 模型字段单测（纯结构校验，不连真库）。
 
 覆盖：
-- ChatSession 新增 5 个 V1.5 字段是否就位
+- ChatSession 新增 5 个字段是否就位
 - KnowledgeBase 字段、唯一约束、check 约束、默认值
 - KbFile 字段、外键、默认值、status/progress 枚举
 """
@@ -21,10 +21,10 @@ from app.models.knowledge_base import (
 
 
 def test_chat_session_has_v1_5_fields():
-    """V1.5 新增 5 个字段必须就位。"""
+    """新增 5 个字段必须就位。"""
     cols = ChatSession.__table__.columns
     for name in ("title", "summary", "summarized_at", "updated_at", "message_count"):
-        assert name in cols, f"ChatSession 缺少 V1.5 字段：{name}"
+        assert name in cols, f"ChatSession 缺少字段：{name}"
 
 
 def test_chat_session_title_max_length():

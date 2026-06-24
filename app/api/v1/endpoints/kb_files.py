@@ -1,4 +1,4 @@
-"""KB 文件管理端点（V1.5 PRD §3.3 FILE-01~05）。
+"""KB 文件管理端点（PRD §3.3 FILE-01~05）。
 
 挂在 /api/v1/knowledge-bases/{kb_id}/files 子路径下；所有响应包成 ApiResponse[T]。
 """
@@ -119,7 +119,7 @@ async def delete_file(
     """删除文件及其全部资源（FILE-04）。
 
     清理顺序：revoke Celery → Milvus → Neo4j → PG → 磁盘。
-    S3.1 阶段 Milvus / Neo4j 步骤为 stub，S3.2 / S5 接通后自动生效。
+    Milvus / Neo4j 步骤为 stub，接通后自动生效。
     """
     await kb_file_service.delete_file(db, kb_id, file_id)
     logger.info("FILE-04 文件已删除 kb_id=%s file_id=%s", kb_id, file_id)

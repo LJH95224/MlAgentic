@@ -1,4 +1,4 @@
-"""V2.0 T12 阶段单测（OBS-03 聚合统计）。"""
+"""聚合统计单测。"""
 
 from __future__ import annotations
 
@@ -237,11 +237,11 @@ class TestAnalyticsWriter:
         assert snap["bm25_contributed"] is False
 
 
-# ──────────────── A P2-19：rollback 失败必须留日志 ────────────────
+# ──────────────── rollback 失败必须留日志 ────────────────
 
 
 class TestAnalyticsWriterRollbackFailure:
-    """A P2-19：write_analytics_snapshot 在 rollback 也失败时不能裸吞。
+    """write_analytics_snapshot 在 rollback 也失败时不能裸吞。
 
     原行为：commit 失败 → rollback 也失败 → except: pass，无任何痕迹。
     修复后：rollback 失败必须 logger.warning，便于排查 session 半损坏的连锁问题。
@@ -276,7 +276,7 @@ class TestAnalyticsWriterRollbackFailure:
         assert any("快照写入失败" in r.message for r in caplog.records), (
             "commit 失败应记录 warning"
         )
-        # A P2-19：rollback 失败的 warning 也必有，不能裸吞
+        # rollback 失败的 warning 也必有，不能裸吞
         assert any("rollback" in r.message.lower() for r in caplog.records), (
             "rollback 失败必须留日志，避免静默吞异常"
         )

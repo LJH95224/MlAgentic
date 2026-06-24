@@ -1,4 +1,4 @@
-"""V2.0 UQA-02 纯检索子接口 POST /api/v2/retrieve。
+"""UQA-02 纯检索子接口 POST /api/v2/retrieve。
 
 只执行检索（hybrid_search），不调用 LLM 生成答案。
 返回经过混合检索 + RRF + Reranker 处理后的 Chunk 列表。

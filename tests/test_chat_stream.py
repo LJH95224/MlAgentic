@@ -1,4 +1,4 @@
-"""流式对话接口测试（API-02 / API-03；V1.5 起 4xx 响应包统一格式）。"""
+"""流式对话接口测试（API-02 / API-03；4xx 响应包统一格式）。"""
 
 import json
 import uuid
@@ -34,9 +34,9 @@ def _parse_sse_lines(text: str) -> list[dict]:
 async def test_chat_stream_full_flow(client):
     """完整链路：创建会话 → 发起流式对话 → 验证文本流 + done 事件。
 
-    SSE 报文（成功路径）保持 V1.0 原协议不包装，前端逻辑零改动。
+    SSE 报文（成功路径）保持原协议不包装，前端逻辑零改动。
     """
-    # 1) 先建会话（V1.5 起响应包 data）
+    # 1) 先建会话（起响应包 data）
     sess_resp = await client.post("/api/v1/sessions")
     session_id = sess_resp.json()["data"]["id"]
 
@@ -69,7 +69,7 @@ async def test_chat_stream_full_flow(client):
 async def test_chat_stream_invalid_session_returns_404(client):
     """对不存在的 session 发起对话应 404 + ApiResponse{code:40400, data:null}。
 
-    V1.5 改造：BusinessError(NOT_FOUND) → 统一 JSON 响应（PRD §7.1 / §7.2）。
+    BusinessError(NOT_FOUND) → 统一 JSON 响应（PRD §7.1 / §7.2）。
     """
     bogus_id = str(uuid.uuid4())
     resp = await client.post(
@@ -95,7 +95,7 @@ async def test_chat_stream_rejects_empty_content(client):
     )
     assert resp.status_code == 422
     body = resp.json()
-    # V1.5 起 Pydantic 校验失败统一翻译为 PARAM_INVALID
+    # Pydantic 校验失败统一翻译为 PARAM_INVALID
     assert body["code"] == error_codes.PARAM_INVALID
     assert body["data"] is None
     # message 应该包含字段名以便前端定位

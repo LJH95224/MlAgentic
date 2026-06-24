@@ -5,7 +5,7 @@
 - 出口：异步迭代器，产出已经 dump 成 dict 的 SSE 事件
 - 副作用：持久化用户消息与 assistant 最终回复 + 维护会话冗余统计
 
-V1.5 改造（SES-09 + S1.2/S1.3）：
+改造（SES-09 + S1.2/S1.3）：
 - _load_history 按 settings.context_window_messages 截断，system 必含、不计数
 - 写每条消息（user / assistant / tool）时同步维护 ChatSession.message_count 与 updated_at
 - 写消息封装到 _append_message 中，避免散落 ChatMessage(...) + add 调用
@@ -46,7 +46,7 @@ logger = logging.getLogger(__name__)
 async def _load_history(db: AsyncSession, session_id: uuid.UUID) -> list[dict]:
     """从 DB 加载该 session 的历史消息（仅供 Agent 推理用），转为 OpenAI dict 格式。
 
-    V1.5 SES-09 上下文窗口策略（与 PRD §3.1 SES-09 一致）：
+    SES-09 上下文窗口策略（与 PRD §3.1 SES-09 一致）：
     - 仅取最近 `CONTEXT_WINDOW_MESSAGES` 条非 system 消息进入推理
     - system 消息始终包含、不计入窗口（满足 PRD 中"system 始终包含、不计入 N 的限制"）
     - tool 类型计入窗口计数（PRD 明确）
@@ -135,7 +135,6 @@ async def _append_message(
 ) -> ChatMessage:
     """写一条消息 + 维护会话冗余统计（message_count + updated_at）。
 
-    V1.5：
     - message_count 是冗余统计字段（PRD §5.1），写消息时 +1
     - updated_at 由 ChatSession 的 onupdate 触发，但 onupdate 仅在该行被 UPDATE 时生效
       （单纯 insert ChatMessage 不会动 session 行）；这里用一条 UPDATE 显式 touch，
@@ -179,7 +178,7 @@ async def stream_chat(
     1. 从 DB 加载历史消息（按 SES-09 上下文窗口截断；本轮 user_input 尚未落库）
     2. 持久化本轮用户消息 + 维护会话计数
     3. 在 contextvar 中设置 kb_ids，让 retriever / KG 工具能读到
-       （V1.5 KB-06：LLM 不可见 kb_ids，只能通过 endpoint 传入）
+       （KB-06：LLM 不可见 kb_ids，只能通过 endpoint 传入）
     4. 调用 agent runner，传入历史 + 当前输入
     5. 把 Agent 内部事件翻译为对外 SSE 事件并 yield
     6. 持久化 assistant 最终回复 + 维护会话计数

@@ -1,4 +1,4 @@
-"""文本切片层（V1.5 PRD §3.3 FILE-01 / §6.2）。
+"""文本切片层（PRD §3.3 FILE-01 / §6.2）。
 
 实现要点：
 - 包装 LangChain `RecursiveCharacterTextSplitter`
@@ -117,7 +117,7 @@ def split_text(
         from langchain_text_splitters import RecursiveCharacterTextSplitter
     except ImportError as e:
         raise RuntimeError(
-            "切片需要 langchain-text-splitters 库（V1.5 requirements 已声明）"
+            "切片需要 langchain-text-splitters 库（requirements 已声明）"
         ) from e
 
     splitter = RecursiveCharacterTextSplitter(

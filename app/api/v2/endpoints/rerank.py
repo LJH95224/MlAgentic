@@ -1,7 +1,7 @@
-"""V2.0 UQA-04 Reranker 子接口 POST /api/v2/rerank。
+"""UQA-04 Reranker 子接口 POST /api/v2/rerank。
 
 接受 Query + 候选文本列表，返回精排后的结果。
-允许开发者将 Hermes 的 Reranker 能力独立使用。
+允许开发者将 Reranker 能力独立使用。
 """
 
 from __future__ import annotations

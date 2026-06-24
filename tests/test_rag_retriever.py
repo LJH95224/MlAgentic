@@ -276,7 +276,7 @@ async def test_do_search_top_k_boundary_values_preserved(mock_settings, mock_hyb
 async def test_do_search_returns_empty_kb_hint_without_hybrid_call(
     mock_settings, mock_hybrid_search, monkeypatch
 ):
-    """kb_ids=[] 时保持 V1.5 语义：不查任何 Collection。"""
+    """kb_ids=[] 时不查任何 Collection。"""
     monkeypatch.setattr("app.rag.retriever.get_current_kb_ids", lambda: [])
     result = await _do_search(
         query="x", top_k=5, doc_type=None, document_id=None, entity_tags=None

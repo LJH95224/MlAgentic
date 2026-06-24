@@ -1,4 +1,4 @@
-"""V2.0 Hermes 全链路集成 smoke。
+"""全链路集成 smoke。
 
 前置：
 - docker compose up -d（PG + Milvus + Neo4j + Redis）
@@ -11,19 +11,19 @@
   python scripts/v2_smoke.py --skip-faithfulness   # 跳过自检节省 LLM 成本
   python scripts/v2_smoke.py --skip-cleanup        # 跑完不删 KB 便于人工查 trace
 
-覆盖 V2.0 P0/P1/P2 全链路：
-  T0 V2 Schema + V2 KB Collection
-  T1 IDP-01/02 结构感知解析 + 切片
-  T2 BM25 + RRF 混合检索
-  T3 Trace 采集 + 查询接口
-  T4 Reranker（可选，依赖 RERANKER_TYPE）
-  T5 Citation 注入 + 解析
-  T6 /api/v2/query 统一查询接口
-  T7 IDP-03/04/05 表格描述 + 双层索引 + 文档元数据
-  T8 HRE-01/02/06 Query 改写 + Query NER + 三层配置合并
-  T9 CHC-03/04 置信度评分 + 答案自检
-  T10 UQA-02/03/04 分层子接口（/retrieve、/generate、/rerank）
-  T12 OBS-03 聚合统计（/api/v2/analytics）
+覆盖全链路：
+  KB Collection Schema + 稀疏向量
+  结构感知解析 + 切片
+  BM25 + RRF 混合检索
+  Trace 采集 + 查询接口
+  Reranker（可选，依赖 RERANKER_TYPE）
+  Citation 注入 + 解析
+  /api/v2/query 统一查询接口
+  表格描述 + 双层索引 + 文档元数据
+  Query 改写 + Query NER + 三层配置合并
+  置信度评分 + 答案自检
+  分层子接口（/retrieve、/generate、/rerank）
+  聚合统计（/api/v2/analytics）
 """
 
 from __future__ import annotations
@@ -124,7 +124,7 @@ async def _wait_completion(client: httpx.AsyncClient, kb_id: str, file_id: str) 
 
 
 def _assert_v2_query_response(name: str, resp: dict, *, expect_unverified: bool | None = None) -> None:
-    """V2.0 query 响应字段完备性断言。"""
+    """query 响应字段完备性断言。"""
     required = [
         "answer", "source_citations", "trace_id", "total_latency_ms",
         "confidence", "faithfulness_check",
@@ -149,7 +149,7 @@ def _assert_v2_query_response(name: str, resp: dict, *, expect_unverified: bool 
 
 
 async def run(args) -> None:
-    logger.info("=== V2.0 Hermes 全链路 smoke 开始 base=%s ===", BASE_URL)
+    logger.info("=== 全链路 smoke 开始 base=%s ===", BASE_URL)
 
     async with httpx.AsyncClient(
         base_url=BASE_URL, timeout=180, trust_env=False,
@@ -159,17 +159,17 @@ async def run(args) -> None:
         assert r.status_code == 200, "FastAPI 未启动"
         logger.info("[0] FastAPI 健康 ✓")
 
-        # ──────── 1) 建一个 V2 KB ────────
+        # ──────── 1) 建 KB ────────
         kb_name = f"v2-smoke-{int(time.time())}"
         r = await client.post(
             "/api/v1/knowledge-bases",
-            json={"name": kb_name, "description": "V2.0 集成 smoke"},
+            json={"name": kb_name, "description": "集成 smoke"},
         )
         kb = _ensure(r)
         kb_id = kb["id"]
         logger.info("[1] KB 已建 id=%s name=%s", kb_id, kb_name)
 
-        # ──────── 1b) HRE-06：用 PATCH 设 KB 级 retrieval_config ────────
+        # ──────── 1b) 用 PATCH 设 KB 级 retrieval_config ────────
         retrieval_config = {
             "top_k": 5,
             "enable_graph_rag": True,
@@ -181,9 +181,9 @@ async def run(args) -> None:
         )
         d = _ensure(r)
         assert d.get("retrieval_config") == retrieval_config, "KB.retrieval_config 写入失败"
-        logger.info("[1b] HRE-06 KB.retrieval_config 已写入 ✓")
+        logger.info("[1b] KB.retrieval_config 已写入 ✓")
 
-        # ──────── 2) 上传 1 份真实文档（含 IDP-03 表格识别覆盖最丰富） ────────
+        # ──────── 2) 上传 1 份真实文档（含表格识别覆盖最丰富） ────────
         docs = _pick_real_docs()
         if not docs:
             raise RuntimeError(
@@ -202,8 +202,8 @@ async def run(args) -> None:
         file_id = d["id"]
         logger.info("[2] 文件已上传 file_id=%s", file_id)
 
-        # ──────── 3) 轮询入库（IDP-03/04/05 + NER + Milvus + Neo4j） ────────
-        logger.info("[3] 等入库完成（含 IDP-03 表格描述 + IDP-04 双层索引 + IDP-05 元数据）")
+        # ──────── 3) 轮询入库（表格描述 + 双层索引 + 元数据 + NER + Milvus + Neo4j） ────────
+        logger.info("[3] 等入库完成（含表格描述 + 双层索引 + 元数据）")
         final = await _wait_completion(client, kb_id, file_id)
         logger.info(
             "[3] 入库完成 chunk_count=%d entity_count=%d completed_at=%s",
@@ -211,15 +211,15 @@ async def run(args) -> None:
         )
         assert final["chunk_count"] > 0, "chunk_count 应 > 0"
 
-        # IDP-05 验收：summary_brief / doc_metadata 已写入
+        # 验收：summary_brief / doc_metadata 已写入
         if final.get("summary_brief"):
-            logger.info("[3a] IDP-05 summary_brief 已写入: %r",
+            logger.info("[3a] summary_brief 已写入: %r",
                         final["summary_brief"][:80])
         else:
             logger.warning("[3a] ⚠ IDP-05 summary_brief 为空（可能 LLM 软失败）")
 
         if final.get("doc_metadata"):
-            logger.info("[3a] IDP-05 doc_metadata: %s",
+            logger.info("[3a] doc_metadata: %s",
                         json.dumps(final["doc_metadata"], ensure_ascii=False)[:200])
         else:
             logger.warning("[3a] ⚠ IDP-05 doc_metadata 为空（可能 LLM 软失败）")
@@ -260,7 +260,7 @@ async def run(args) -> None:
             resp_a["total_latency_ms"] or 0,
         )
 
-        # 5b：HRE-01 HyDE 改写
+        # 5b：HyDE 改写
         logger.info("[5b] HyDE 改写：query_rewrite=hyde")
         r = await client.post(
             "/api/v2/query",
@@ -280,7 +280,7 @@ async def run(args) -> None:
         if not rewritten:
             logger.warning("  ⚠ rewritten_query 为空（LLM 改写软失败）")
 
-        # 5c：HRE-01 multi_query 改写
+        # 5c：multi_query 改写
         logger.info("[5c] multi_query 改写：query_rewrite=multi_query")
         r = await client.post(
             "/api/v2/query",
@@ -298,7 +298,7 @@ async def run(args) -> None:
             len(sub_qs), resp_c["confidence"] or 0, len(resp_c["source_citations"]),
         )
 
-        # 5d：CHC-04 答案自检（默认 False，这里显式打开）
+        # 5d：答案自检（默认 False，这里显式打开）
         if not args.skip_faithfulness:
             logger.info("[5d] CHC-04 答案自检：enable_faithfulness_check=true")
             r = await client.post(
@@ -331,7 +331,7 @@ async def run(args) -> None:
         else:
             logger.info("[5d] 已跳过自检（--skip-faithfulness）")
 
-        # ──────── 6) Trace 链路完整性（OBS-02） ────────
+        # ──────── 6) Trace 链路完整性 ────────
         logger.info("[6] 验 Trace step 链完整")
         trace_id = resp_a["trace_id"]
         r = await client.get(f"/api/v2/traces/{trace_id}")
@@ -339,7 +339,7 @@ async def run(args) -> None:
         steps = trace.get("steps", [])
         step_types = [s["step_type"] for s in steps]
         logger.info("  trace 步骤序列：%s", " → ".join(step_types))
-        # 必含 V2 关键步骤
+        # 必含关键步骤
         for must in ("query_rewrite", "query_ner", "graph_anchor",
                      "retrieve", "build_context", "generate", "citation_parse"):
             if must in step_types:
@@ -357,8 +357,8 @@ async def run(args) -> None:
             else:
                 logger.warning("  ⚠ 5d trace 缺 faithfulness_check")
 
-        # ──────── 8) T10 分层子接口（UQA-02/03/04） ────────
-        # 8a) UQA-02 /v2/retrieve（不调 LLM 的纯检索）
+        # ──────── 8) 分层子接口 ────────
+        # 8a) /v2/retrieve（不调 LLM 的纯检索）
         logger.info("[8a] UQA-02 /v2/retrieve：不调 LLM 的纯检索")
         r = await client.post(
             "/api/v2/retrieve",
@@ -393,7 +393,7 @@ async def run(args) -> None:
                 first.get("rrf_score"),
             )
 
-        # 8b) UQA-04 /v2/rerank（独立精排端点）
+        # 8b) /v2/rerank（独立精排端点）
         logger.info("[8b] UQA-04 /v2/rerank：独立精排端点")
         rerank_candidates = [
             {"id": "c1", "text": "气象卫星用于监测地球表面与大气层"},
@@ -423,7 +423,7 @@ async def run(args) -> None:
         scores = [r["rerank_score"] for r in results]
         assert scores == sorted(scores, reverse=True), "[8b] results 应按 rerank_score 降序"
 
-        # 8c) UQA-03 /v2/generate（开发者自定义 context 跳过检索）
+        # 8c) /v2/generate（开发者自定义 context 跳过检索）
         logger.info("[8c] UQA-03 /v2/generate：自定义 context 跳过检索")
         custom_context = [
             {
@@ -462,8 +462,8 @@ async def run(args) -> None:
             gen_resp.get("faithfulness_check"),
         )
 
-        # ──────── 9) T12 /api/v2/analytics 聚合统计（OBS-03） ────────
-        logger.info("[9] T12 OBS-03 /api/v2/analytics 聚合统计")
+        # ──────── 9) /api/v2/analytics 聚合统计 ────────
+        logger.info("[9] OBS-03 /api/v2/analytics 聚合统计")
         # 限定 kb_id 防止历史数据干扰；smoke 已发 3-4 次 /v2/query 写入快照
         r = await client.get(
             "/api/v2/analytics",
@@ -519,14 +519,14 @@ async def run(args) -> None:
         else:
             logger.info("[7] 已跳过清理（--skip-cleanup），保留 kb_id=%s", kb_id)
 
-    logger.info("=== ✓ V2.0 全链路 smoke 通过 ===")
+    logger.info("=== ✓ 全链路 smoke 通过 ===")
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="V2.0 Hermes 全链路集成 smoke")
+    parser = argparse.ArgumentParser(description="全链路集成 smoke")
     parser.add_argument(
         "--skip-faithfulness", action="store_true",
-        help="跳过 CHC-04 答案自检节省 LLM 成本",
+        help="跳过答案自检节省 LLM 成本",
     )
     parser.add_argument(
         "--skip-cleanup", action="store_true",

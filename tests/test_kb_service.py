@@ -1,4 +1,4 @@
-"""V1.5 KB-01~05 service 层单测（mock DB + mock Milvus，CI 友好）。
+"""KB-01~05 service 层单测（mock DB + mock Milvus，CI 友好）。
 
 覆盖 endpoint 测无法验的"service 内部协调"逻辑：
 - KB-01 create_kb：先建 Milvus 再写 PG；任一失败回滚
@@ -47,7 +47,7 @@ def _make_db_mock(*, name_exists: bool = False):
 def patched_milvus(monkeypatch):
     """同时 mock create_v2_kb_collection / drop_kb_collection（覆盖 _safe_rollback_milvus）。
 
-    V2.0 起 KB 创建走 create_v2_kb_collection（V2 Schema，含 sparse_vector + heading_path 等）。
+    KB 创建走 create_v2_kb_collection（含 sparse_vector + heading_path 等）。
     """
     create_mock = MagicMock(return_value="kb_test_collection")
     drop_mock = MagicMock(return_value=True)

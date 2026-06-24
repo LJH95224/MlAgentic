@@ -1,4 +1,4 @@
-"""V1.5 业务错误码定义（PRD §7.2）。
+"""业务错误码定义（PRD §7.2）。
 
 设计约定：
 - 业务 code 与 HTTP status 解耦但成对维护，便于前端按业务 code 做差异化处理
@@ -19,9 +19,9 @@ SUCCESS = 0
 # 通用参数错误
 PARAM_INVALID = 40001  # 请求参数校验失败（缺字段 / 类型错 / 超长 / 取值越界）
 IMMUTABLE_FIELD = 40002  # 尝试修改 embedding_dim 等不可变字段（PRD KB-04）
-QUERY_REWRITE_INVALID = 40011  # query_rewrite 枚举值非法（PRD §1127 / V2.0 HRE-01）
-EVAL_DATASET_EMPTY = 40012  # 评估集为空（V2.0 EVA-01，PRD §805）
-EVAL_DATASET_TOO_LARGE = 40013  # 评估集超出 EVAL_MAX_QUESTIONS 上限（V2.0 EVA-01）
+QUERY_REWRITE_INVALID = 40011  # query_rewrite 枚举值非法（PRD §1127 / HRE-01）
+EVAL_DATASET_EMPTY = 40012  # 评估集为空（EVA-01，PRD §805）
+EVAL_DATASET_TOO_LARGE = 40013  # 评估集超出 EVAL_MAX_QUESTIONS 上限（EVA-01）
 
 # 404 — 资源不存在
 NOT_FOUND = 40400  # Session / KnowledgeBase / File 不存在

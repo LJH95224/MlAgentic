@@ -1,4 +1,4 @@
-"""V2.0 OBS-03 聚合统计快照写入。
+"""OBS-03 聚合统计快照写入。
 
 每次 /v2/query 调用结束时，将关键指标汇总写一行到 query_analytics 表。
 analytics 端点对该表做 SQL 聚合，无需扫描 agent_traces 的 JSONB 字段。
@@ -140,7 +140,7 @@ async def write_analytics_snapshot(
     except Exception as e:  # noqa: BLE001
         logger.warning("Analytics 快照写入失败（已忽略）: %s", e)
         # 失败时回滚，避免 session 处于损坏状态影响后续操作
-        # A P2-19：rollback 失败也必须留 warning，不能裸吞——
+        # rollback 失败也必须留 warning，不能裸吞——
         # 否则 session 处于半损坏状态时调用方完全看不到任何痕迹，
         # 后续操作链一旦报错很难溯源。
         try:

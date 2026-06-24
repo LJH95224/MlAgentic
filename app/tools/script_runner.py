@@ -6,7 +6,7 @@
 - 跨平台：Windows 与 Linux 上都能正确杀子进程及其子孙进程
 - 防注入：cmd 必须是 list，禁止 shell=True 字符串拼接
 
-V1.0 阶段：此引擎**不作为 LLM 工具注册**。后续具体业务（如气象脚本调度、
+阶段：此引擎**不作为 LLM 工具注册**。后续具体业务（如气象脚本调度、
 RAG 文档预处理脚本）可以在自己的 @tool 装饰函数里调用 run_script，并对
 命令做白名单 / 参数校验。
 """
@@ -159,7 +159,7 @@ async def _force_kill(proc: asyncio.subprocess.Process) -> None:
 
     Linux/Mac: killpg(SIGKILL) 杀整个进程组（依赖创建时 setsid）。
     Windows:   proc.kill() —— Python 内部转 TerminateProcess。
-              注：CREATE_NEW_PROCESS_GROUP 不会自动杀子孙，但 V1.0 阶段
+              注：CREATE_NEW_PROCESS_GROUP 不会自动杀子孙，但阶段
               脚本一般是单进程，业务上够用。
     """
     if proc.returncode is not None:

@@ -1,4 +1,4 @@
-"""knowledge_bases 表：知识库元数据（V1.5 PRD §5.2 + V2.0 扩展）。
+"""knowledge_bases 表：知识库元数据（扩展）。
 
 每个知识库对应：
 - 一张 Milvus Collection（命名 `kb_{kb_id_no_hyphen}`，详见 app/rag/naming.py）
@@ -7,7 +7,7 @@
 字段全部按 PRD §5.2 落地。`embedding_dim / chunk_size / chunk_overlap` 创建后只读
 （KB-04 明确要求）。
 
-V2.0 新增字段（T0.2）：
+新增字段：
 - retrieval_config: JSONB — 混合检索配置（BM25 权重 / Reranker 开关 / top_k 等）
 - doc_metadata_schema: JSONB — 文档元数据模板（IDP-05 双层索引用）
 """
@@ -25,7 +25,7 @@ from app.models.base import Base, UUIDMixin
 KB_STATUS_ACTIVE = "active"
 KB_STATUS_BUILDING = "building"
 KB_STATUS_ERROR = "error"
-# P1-9 新增：删除补偿状态机
+# 删除补偿状态机
 # deleting       — 用户已 DELETE，正在同步清理 Milvus / Neo4j；窗口期 < 1s
 # pending_cleanup — 外存清理失败，等 cleanup_reaper_task 后台补偿；list 接口对用户隐藏
 KB_STATUS_DELETING = "deleting"
@@ -118,16 +118,16 @@ class KnowledgeBase(UUIDMixin, Base):
         comment="创建时间",
     )
 
-    # ── P1-9 删除补偿相关字段 ──
-    # updated_at：KB 行最后更新时间。P1-9 之前 KB 没有这个字段（KbFile 有，因 reaper 需要心跳）；
-    #   P1-9 引入后用作 cleanup_reaper_task 扫描时的排序依据（旧的 pending_cleanup 优先处理）。
+    # ── 删除补偿相关字段 ──
+    # updated_at：KB 行最后更新时间。之前 KB 没有这个字段（KbFile 有，因 reaper 需要心跳）；
+    #   引入后用作 cleanup_reaper_task 扫描时的排序依据（旧的 pending_cleanup 优先处理）。
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
         onupdate=func.now(),
         nullable=False,
         index=True,
-        comment="P1-9 行最后更新时间；pending_cleanup 扫描据此判定优先级",
+        comment="行最后更新时间；pending_cleanup 扫描据此判定优先级",
     )
 
     # cleanup_retry_count：见 kb_file.py 同名字段说明
@@ -136,23 +136,23 @@ class KnowledgeBase(UUIDMixin, Base):
         nullable=False,
         default=0,
         server_default="0",
-        comment="P1-9 待补偿清理重试次数；超过 CLEANUP_REAPER_MAX_RETRY 仅告警",
+        comment="待补偿清理重试次数；超过 CLEANUP_REAPER_MAX_RETRY 仅告警",
     )
 
-    # ── V2.0 新增字段（T0.2） ──
+    # ── 新增字段 ──
 
     retrieval_config: Mapped[dict | None] = mapped_column(
         JSONB,
         nullable=True,
         default=None,
-        comment="V2.0 混合检索配置（bm25_weight / reranker_enable / top_k 等）",
+        comment="混合检索配置（bm25_weight / reranker_enable / top_k 等）",
     )
 
     doc_metadata_schema: Mapped[dict | None] = mapped_column(
         JSONB,
         nullable=True,
         default=None,
-        comment="V2.0 文档元数据模板（IDP-05 双层索引，定义可提取的元数据字段）",
+        comment="文档元数据模板（IDP-05 双层索引，定义可提取的元数据字段）",
     )
 
     __table_args__ = (

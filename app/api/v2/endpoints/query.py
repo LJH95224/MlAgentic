@@ -1,12 +1,12 @@
-"""V2.0 统一查询接口 /api/v2/query（UQA-01 + HRE-01/02/06，T8 完整版）。
+"""统一查询接口 /api/v2/query（UQA-01 + HRE-01/02/06，完整版）。
 
-完整链路（T8 起）：
+完整链路：
 
     三层配置合并 → Query 改写（HyDE / multi_query）→ Query NER → 图谱锚定
         → 混合检索（hybrid + entity_tags 过滤；multi_query 时 RRF 二次融合）
         → build_context → LLM 生成 → parse_citations → 返回响应
 
-支持流式（SSE）和非流式两种模式。T6/T8 阶段先实现非流式。
+支持流式（SSE）和非流式两种模式。先实现非流式。
 """
 
 from __future__ import annotations
@@ -59,7 +59,7 @@ async def v2_query(
     body: QueryRequest,
     db: AsyncSession = Depends(get_db),
 ) -> QueryResponse:
-    """V2.0 统一查询接口（UQA-01 / HRE-01/02/06）。
+    """统一查询接口（UQA-01 / HRE-01/02/06）。
 
     非流式模式：返回完整答案 + 引用列表 + trace_id + Query 增强可观测信息。
     """
@@ -76,7 +76,6 @@ async def v2_query(
     resolved = resolve_options(options=body.options, kb=kb_obj, settings=settings)
 
     # KB-06 contextvar：让下游 hybrid_search / kg.tool 等通过 contextvar 拿到 kb_ids
-    # （V1.5 chat_service 同款机制；T6 阶段遗漏，T9 联调阶段补上）
     kb_ids_token = set_current_kb_ids(body.kb_ids)
     try:
         # 整体请求硬超时保护：防止单步 LLM/Milvus 卡死导致请求无限挂起
@@ -253,7 +252,7 @@ async def _v2_query_inner(
         with tracer.step("citation_parse", step_input={"answer_len": len(answer)}):
             source_citations = parse_citations(answer, chunks_for_citation)
 
-        # ── Step 8 (T9): 答案自检（CHC-04）──
+        # ── Step 8: 答案自检（CHC-04）──
         # 默认 disabled；开启时跑 LLM as Judge，失败软降级为 skipped
         faith_result: FaithfulnessResult = DISABLED_RESULT
         if resolved.enable_faithfulness_check:
@@ -272,7 +271,7 @@ async def _v2_query_inner(
             if faith_result.unverified:
                 answer = append_unverified_warning(answer, faith_result.unverified)
 
-        # ── Step 9 (T9): 置信度评分（CHC-03）──
+        # ── Step 9: 置信度评分（CHC-03）──
         score: ConfidenceScore = compute_confidence(
             cited_chunks=source_citations,
             top_k=resolved.top_k,
@@ -459,7 +458,7 @@ async def generate_answer(
     session_id: uuid.UUID | None,
     db: AsyncSession,
 ) -> str:
-    """调用 LLM 生成答案（V2 query 主链路 + T11 评估管道共用）。
+    """调用 LLM 生成答案（query 主链路 + 评估管道共用）。
 
     使用 LiteLLM acompletion，注入 citation 规则的 system prompt。
     超时保护：litellm_timeout + asyncio.wait_for 双重兜底。

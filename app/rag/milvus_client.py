@@ -127,14 +127,14 @@ def close_milvus() -> None:
         logger.info("Milvus 连接已释放")
 
 
-# ──────────────── V1.5 多 KB Collection 生命周期 ────────────────
+# ──────────────── KB Collection 生命周期 ────────────────
 
 
 def create_kb_collection(
     kb_id: uuid.UUID | str,
     dim: int | None = None,
 ) -> str:
-    """为指定知识库创建独立 Milvus Collection（V1.5 KB-01）。
+    """为指定知识库创建独立 Milvus Collection（KB-01）。
 
     同步完成：
       1. 创建 Collection（schema 见 build_kb_collection_schema）
@@ -192,7 +192,7 @@ def create_kb_collection(
 
 
 def drop_kb_collection(kb_id: uuid.UUID | str) -> bool:
-    """删除指定知识库的 Milvus Collection（V1.5 KB-05）。
+    """删除指定知识库的 Milvus Collection（KB-05）。
 
     不可逆操作。建议调用方先在业务层做二次确认。
     幂等：Collection 不存在 → 直接返回 False；存在 → drop 后返回 True。
@@ -240,7 +240,7 @@ def kb_collection_exists(kb_id: uuid.UUID | str) -> bool:
     return client.has_collection(build_kb_collection_name(kb_id))
 
 
-# ──────────────── V2.0 KB Collection 生命周期 ────────────────
+# ──────────────── KB Collection（新版 Schema）生命周期 ────────────────
 
 
 def create_v2_kb_collection(
@@ -249,9 +249,9 @@ def create_v2_kb_collection(
     *,
     client: "MilvusClient | None" = None,
 ) -> str:
-    """为指定知识库创建 V2.0 版 Milvus Collection（T0.3）。
+    """为指定知识库创建新版 Milvus Collection。
 
-    V2.0 与 V1.5 的差异：
+    与旧版 Collection 的差异：
     - Schema 新增 7 个字段（heading_path / block_type / page_number / position_index /
       parent_chunk_id / is_summary / sparse_vector）
     - 索引新增 SPARSE_INVERTED_INDEX + BM25（用于混合检索）
@@ -315,10 +315,10 @@ __all__ = [
     "init_milvus",
     "get_milvus_client",
     "close_milvus",
-    # V1.5 KB Collection 生命周期
+    # KB Collection 生命周期
     "create_kb_collection",
     "drop_kb_collection",
     "kb_collection_exists",
-    # V2.0 KB Collection 生命周期
+    # KB Collection（新版 Schema）生命周期
     "create_v2_kb_collection",
 ]

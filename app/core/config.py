@@ -72,7 +72,7 @@ class Settings(BaseSettings):
     # 必须与 Milvus Collection 中 vector 字段的 dim 严格一致，否则写入/检索都会出错
     embedding_dimension: int = Field(default=4096, alias="EMBEDDING_DIMENSION")
 
-    # --- RAG 权限基线（V1.0 硬编码，3.6 接入用户体系后再替换） ---
+    # --- RAG 权限基线（硬编码，接入用户体系后再替换） ---
     # 工具内部检索时会自动追加 ARRAY_CONTAINS(allowed_roles, rag_default_role) 过滤
     rag_default_role: str = Field(default="ALL", alias="RAG_DEFAULT_ROLE")
 
@@ -91,13 +91,13 @@ class Settings(BaseSettings):
     # 想用更便宜的轻量模型做 NER 时，可独立指定
     kg_ner_model: str | None = Field(default=None, alias="KG_NER_MODEL")
 
-    # 跳过 NER 步骤（V1.5 S3 联调用：大文档场景下 LLM NER 极慢，先跳过验证管道
+    # 跳过 NER 步骤（联调时：大文档场景下 LLM NER 极慢，先跳过验证管道
     # 主链路；S5 之后再评估是否换本地 NER 引擎 / 完全砍掉）
     # 设为 true 时，所有 chunk 的 entity_tags 写空数组，Neo4j 不写实体
     skip_ner: bool = Field(default=False, alias="SKIP_NER")
 
     # ============================================================
-    # V2.0 新增（Hermes · 2026-06-12 起启用）
+    # 新增（2026-06-12 起启用）
     # ============================================================
 
     # --- Reranker 精排（HRE-05） ---
@@ -121,10 +121,10 @@ class Settings(BaseSettings):
     # --- Trace 可观测性（OBS-01/02） ---
     # 启用后，每次 /v2/query 调用自动写 trace 到 agent_traces 表
     trace_enable: bool = Field(default=True, alias="TRACE_ENABLE")
-    # Trace 数据保留天数（过期记录由定期清理 cron 清理，T12 阶段实现）
+    # Trace 数据保留天数（过期记录由定期清理 cron 清理）
     trace_retention_days: int = Field(default=90, alias="TRACE_RETENTION_DAYS")
 
-    # --- Query 增强（HRE-01 / HRE-02，T8 阶段启用） ---
+    # --- Query 增强（HRE-01 / HRE-02） ---
     # Query 改写器使用的 LLM 模型；留空则复用 LITELLM_MODEL
     # 想用更便宜/更快的轻量模型做 HyDE / multi_query 时，可独立指定
     query_rewriter_model: str | None = Field(default=None, alias="QUERY_REWRITER_MODEL")
@@ -141,7 +141,7 @@ class Settings(BaseSettings):
     # 图谱锚定单实体 Cypher 查询硬超时（秒），多实体并发时使用
     graph_anchor_timeout_s: float = Field(default=5.0, alias="GRAPH_ANCHOR_TIMEOUT_S")
 
-    # --- IDP 智能文档处理（IDP-03 / IDP-04 / IDP-05，T7 阶段启用） ---
+    # --- IDP 智能文档处理（IDP-03 / IDP-04 / IDP-05） ---
     # 表格描述 / 段落摘要 / 文档元数据三步统一用此 LLM；留空则复用 LITELLM_MODEL
     # （与 KG_NER_MODEL / QUERY_REWRITER_MODEL 同款解耦风格）
     idp_llm_model: str | None = Field(default=None, alias="IDP_LLM_MODEL")
@@ -154,7 +154,7 @@ class Settings(BaseSettings):
     # 文档元数据提取时取前 N 个字符做输入（PRD §IDP-05 推荐前 3000 token，约 8000 中文）
     idp_doc_meta_input_chars: int = Field(default=8000, alias="IDP_DOC_META_INPUT_CHARS")
 
-    # --- 答案自检（CHC-04，T9 阶段启用） ---
+    # --- 答案自检（CHC-04） ---
     # 留空则复用 LITELLM_MODEL（与 IDP_LLM_MODEL / KG_NER_MODEL 同款解耦风格）
     faithfulness_model: str | None = Field(default=None, alias="FAITHFULNESS_CHECK_MODEL")
     # 答案自检全局默认开关；API options.enable_faithfulness_check / KB.retrieval_config 都可覆盖
@@ -163,13 +163,13 @@ class Settings(BaseSettings):
     # 自检 LLM 调用硬超时（秒）；超时软失败返 skipped 不阻断主链路
     faithfulness_check_timeout_s: float = Field(default=8.0, alias="FAITHFULNESS_CHECK_TIMEOUT_S")
 
-    # --- V2.0 查询接口超时保护 ---
+    # --- 查询接口超时保护 ---
     # /api/v2/query 整体请求硬超时（秒），覆盖所有内部步骤
     # 包含：query_rewrite + NER + graph_anchor + hybrid_search + LLM generate + faithfulness
     # 默认 120s：embedding(30s) + Milvus(5s) + LLM(60s) + 余量(25s)
     query_total_timeout_s: float = Field(default=120.0, alias="QUERY_TOTAL_TIMEOUT_S")
 
-    # --- RAGAS 评估（EVA-01/02/03，T11 阶段启用） ---
+    # --- RAGAS 评估（EVA-01/02/03） ---
     # 评估时 LLM-as-Judge 用的模型；留空复用 LITELLM_MODEL（与 KG_NER_MODEL 同款解耦）
     eval_llm_model: str | None = Field(default=None, alias="EVAL_LLM_MODEL")
     # 单次评估集硬上限题数（PRD §1147 风险表："评估集硬上限 100 条"，防误传 1000 题烧 token）
@@ -180,7 +180,7 @@ class Settings(BaseSettings):
     eval_question_timeout_s: float = Field(default=60.0, alias="EVAL_QUESTION_TIMEOUT_S")
 
     # ============================================================
-    # V1.5 新增（数据管理层 · 2026-06-11 起启用）
+    # 新增（数据管理层 · 2026-06-11 起启用）
     # ============================================================
 
     # --- Redis（Celery broker / backend，TASK-01） ---
@@ -200,7 +200,7 @@ class Settings(BaseSettings):
     # 单文件大小上限（MB），超出返 413（PRD §7.2）
     max_file_size_mb: int = Field(default=50, alias="MAX_FILE_SIZE_MB")
 
-    # --- 卡死 processing 文件回收（A P1-11） ---
+    # --- 卡死 processing 文件回收 ---
     # ingest_task 心跳超时阈值（秒）：status=processing 且 updated_at 早于 now-阈值
     # 视为卡死。默认 35 min = Celery hard timeout(30min) + 5min 缓冲，防误判合法慢任务。
     ingest_stale_timeout_s: int = Field(default=35 * 60, alias="INGEST_STALE_TIMEOUT_S")
@@ -209,7 +209,7 @@ class Settings(BaseSettings):
     # 回收任务总开关；本地纯单测 / 演示环境可关
     ingest_reaper_enable: bool = Field(default=True, alias="INGEST_REAPER_ENABLE")
 
-    # --- KB / KbFile 删除外存清理补偿（A P1-9） ---
+    # --- KB / KbFile 删除外存清理补偿 ---
     # cleanup_reaper_task 周期间隔，默认 5 min（比 reaper_task 更勤 — 删除是热数据）
     cleanup_reaper_interval_s: int = Field(default=300, alias="CLEANUP_REAPER_INTERVAL_S")
     # 最大重试次数（默认 10 ≈ 5 min × 10 = 50 min 内自动兜底；超过后仅告警不再重试）

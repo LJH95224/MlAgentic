@@ -1,4 +1,4 @@
-"""V1.5 S4 SES-07 / SES-08 endpoint + chat_service 触发逻辑测试。
+"""SES-07 / SES-08 endpoint + chat_service 触发逻辑测试。
 
 不依赖真 PG / Celery worker；mock 掉 session_service / Celery delay 验证：
 - POST /sessions/{id}/summarize: 202 + task_id / 404 / Celery 不可达

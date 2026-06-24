@@ -1,15 +1,15 @@
-"""V1.5 S5 KB-06 关联对话 + V1.5 全链路端到端 smoke。
+"""KB-06 关联对话 + 全链路端到端 smoke。
 
-前置：所有服务起着（同 v1_5_s3_smoke）+ Celery worker 起着。
+前置：所有服务起着 + Celery worker 起着。
 
 流程：
   1. 建两个 KB：kb_A、kb_B
   2. 各上传一份文档
   3. 轮询入库完成
-  4. 对话 1：不传 kb_ids → 走默认 collection（V1.0 行为）
+  4. 对话 1：不传 kb_ids → 走默认 collection（默认行为）
   5. 对话 2：kb_ids=[kb_A] → SSE tool_start 含 _kb_ids 信息；只查 kb_A
   6. 对话 3：kb_ids=[] → 不查任何 KB
-  7. KB-03 详情：entity_count 接通 Neo4j 真实计数（S5 解 stub）
+  7. KB-03 详情：entity_count 接通 Neo4j 真实计数
   8. 删两个 KB 清理
 
 跑法：
@@ -157,7 +157,7 @@ async def _stream_chat_collect(client, session_id, content, kb_ids=None):
 
 
 async def main() -> None:
-    logger.info("=== V1.5 全链路 smoke 开始 base=%s ===", BASE_URL)
+    logger.info("=== 全链路 smoke 开始 base=%s ===", BASE_URL)
 
     async with httpx.AsyncClient(
         base_url=BASE_URL, timeout=120, trust_env=False
@@ -173,7 +173,7 @@ async def main() -> None:
             r = await client.post(
                 "/api/v1/knowledge-bases",
                 json={"name": f"smoke-{label}-{int(time.time())}",
-                      "description": f"S5 测试 {label}"},
+                      "description": f"测试 {label}"},
             )
             d = _ensure(r)
             kbs[label] = d["id"]
@@ -230,7 +230,7 @@ async def main() -> None:
         logger.info("[5] 已建对话 session=%s", sid)
 
         # 对话 5a：不传 kb_ids
-        logger.info("[5.a] 对话不传 kb_ids（V1.0 默认行为）")
+        logger.info("[5.a] 对话不传 kb_ids（默认行为）")
         events_a = await _stream_chat_collect(client, sid, "你好，简单介绍下你能做什么。")
         text_a = "".join(e.get("content", "") for e in events_a if e.get("type") == "text")
         logger.info("  ✓ 收到 %d 个 SSE 事件，正文 %d 字", len(events_a), len(text_a))
@@ -272,7 +272,7 @@ async def main() -> None:
             for p in (doc_a, doc_b):
                 p.unlink(missing_ok=True)
 
-    logger.info("=== ✓ V1.5 全链路 smoke 通过 ===")
+    logger.info("=== ✓ 全链路 smoke 通过 ===")
 
 
 if __name__ == "__main__":

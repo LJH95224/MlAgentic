@@ -1,4 +1,4 @@
-"""V1.5 SES-09 + chat_service 集成测试（依赖真 PostgreSQL）。
+"""SES-09 + chat_service 集成测试（依赖真 PostgreSQL）。
 
 不依赖真 LLM / Milvus / Neo4j（用 conftest 的 `pg_client` 跳过相关初始化），
 只覆盖：

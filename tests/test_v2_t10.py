@@ -1,4 +1,4 @@
-"""V2.0 T10 阶段单测（UQA-02/03/04 分层子接口）。"""
+"""分层子接口单测（/retrieve /generate /rerank）。"""
 
 from __future__ import annotations
 
@@ -539,7 +539,7 @@ class TestGenerateEndpoint:
 
 
 class TestT10E2E:
-    """T10 三个子接口端到端集成。"""
+    """三个子接口端到端集成。"""
 
     @pytest.mark.asyncio
     async def test_retrieve_e2e(self):

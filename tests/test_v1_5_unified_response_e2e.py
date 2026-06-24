@@ -1,10 +1,10 @@
 """S1.0b 改造的端到端验证（mock 掉 DB / 服务层，专测统一响应格式）。
 
-V1.0 原 `tests/test_sessions_api.py` / `tests/test_chat_stream.py` 全部依赖真 PG
+原 `tests/test_sessions_api.py` / `tests/test_chat_stream.py` 全部依赖真 PG
 （`@skip_without_db` 装饰），CI 上默认 skip，无法保证统一响应格式改造没回退。
 
 本文件用 FastAPI 的 `dependency_overrides` + monkeypatch service 层，跑一个真实的
-ASGI app（注册了 V1.5 handler + 真实的 endpoint 代码），但底层不连 DB。专攻：
+ASGI app（注册了 handler + 真实的 endpoint 代码），但底层不连 DB。专攻：
 
 - POST /api/v1/sessions 成功 → 响应包成 ApiResponse[CreateSessionResponse]
 - POST /api/v1/chat/stream session 不存在 → ApiResponse(40400) JSON
@@ -46,7 +46,7 @@ def client_no_db(monkeypatch):
 def test_create_session_returns_unified_response(client_no_db, monkeypatch):
     """POST /api/v1/sessions 必须返回 ApiResponse{code:0, data:{id, ..., created_at}}。
 
-    V1.5 SES-01 起 data 是完整 SessionDetail，含 title/summary/message_count/updated_at；
+    SES-01 起 data 是完整 SessionDetail，含 title/summary/message_count/updated_at；
     本测试只校验顶层包装与 id/created_at 序列化，详细字段由 test_sessions_v1_5_endpoints 覆盖。
     """
     fake_id = uuid4()
@@ -77,7 +77,7 @@ def test_create_session_returns_unified_response(client_no_db, monkeypatch):
     assert body["code"] == error_codes.SUCCESS
     assert body["message"] == "success"
 
-    # data 字段结构（V1.5 详尽字段在 test_sessions_v1_5_endpoints 覆盖）
+    # data 字段结构（详尽字段在 test_sessions_v1_5_endpoints 覆盖）
     data = body["data"]
     assert data["id"] == str(fake_id)
     # ISO 8601 时间戳序列化

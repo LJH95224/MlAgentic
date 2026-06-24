@@ -1,4 +1,4 @@
-"""agent_traces 表：V2.0 可观测性 Trace 记录（OBS-01）。
+"""agent_traces 表：可观测性 Trace 记录（OBS-01）。
 
 每次 /v2/query 调用产生一条 trace，内部各步骤（解析/检索/重排/生成/引用解析等）
 各产生一条子记录。通过 trace_id 串联完整推理链路。
@@ -21,7 +21,7 @@ from app.models.base import Base
 
 
 class AgentTrace(Base):
-    """Agent 推理链路追踪记录（V2.0 OBS-01）。"""
+    """Agent 推理链路追踪记录（OBS-01）。"""
 
     __tablename__ = "agent_traces"
 

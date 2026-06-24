@@ -1,4 +1,4 @@
-"""V2.0 CHC-04 答案自检（Faithfulness Check）。
+"""答案自检（CHC-04 Faithfulness Check）。
 
 PRD §CHC-04：LLM 生成答案后，调一次轻量 LLM 把答案中的关键事实声明逐一比对
 context，标 ``supported`` / ``unverified``，把 unverified 比例反馈给 confidence

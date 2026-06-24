@@ -1,4 +1,4 @@
-"""V2.0 Reranker 精排模块（HRE-05）。
+"""Reranker 精排模块（HRE-05）。
 
 核心类：
 - BaseReranker：抽象基类
@@ -16,7 +16,7 @@
 - 过滤后剩余 < 3 时保留 top-3 不截断（PRD 兜底规则）
 - 并发控制：API 调用加 Semaphore 限制
 
-配置项（app/core/config.py T0.1 已加）：
+配置项（app/core/config.py）：
 - RERANKER_TYPE：none / api
 - RERANKER_MODEL：默认 BAAI/bge-reranker-v2-m3
 - RERANKER_API_KEY / RERANKER_API_BASE

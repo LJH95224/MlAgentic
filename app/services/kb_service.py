@@ -1,4 +1,4 @@
-"""知识库业务逻辑（V1.5 PRD §3.2 KB-01~05）。
+"""知识库业务逻辑（PRD §3.2 KB-01~05）。
 
 设计要点：
 - KB-01 同步：先建 Milvus Collection，再写 PG。任一步失败 → 整体回滚（PG 事务
@@ -210,14 +210,14 @@ async def update_kb(
     retrieval_config: dict | None = None,
     retrieval_config_was_set: bool = False,
 ) -> KnowledgeBase:
-    """更新知识库字段（KB-04 + V2.0 HRE-06）。
+    """更新知识库字段（KB-04 + HRE-06）。
 
     Args:
         name: 新名称；None 表示不改
         description: 新描述；None 含义看 description_was_set
         description_was_set: True = 用户显式传了 description（可能为 None，等价"清空"）
                              False = 用户未传 description 字段（保持原值）
-        retrieval_config: V2.0 知识库级检索默认配置；含义看 retrieval_config_was_set
+        retrieval_config: 知识库级检索默认配置；含义看 retrieval_config_was_set
         retrieval_config_was_set: True = 用户显式传了 retrieval_config，按以下规则处理：
                                    - {} → 清空所有覆盖（写 None）
                                    - dict 非空 → 完整覆盖（不做 deep merge，调用方自己合并）
@@ -263,7 +263,7 @@ async def update_kb(
 
 
 async def delete_kb(db: AsyncSession, kb_id: uuid.UUID) -> None:
-    """完全清理知识库的所有资源（KB-05 + V2 hardening P1-9）。
+    """完全清理知识库的所有资源（KB-05 + hardening P1-9）。
 
     P1-9 改造：把"Milvus 失败 → 整体回滚返 500"改成"失败降级为补偿"：
 
@@ -273,7 +273,7 @@ async def delete_kb(db: AsyncSession, kb_id: uuid.UUID) -> None:
       4) 全 OK → PG 真删 + 磁盘清理
          任一失败 → status 改 pending_cleanup + commit（用户视角接口仍返 200）
 
-    与 P1-9 之前的差异：
+    与之前的差异：
     - 不再向用户抛 500（Milvus 暂时不可用不是用户该关心的中断）
     - 外存清理失败时保留 PG 行，让 cleanup_reaper_task 后台兜底
     - PG 删除失败仍抛 500（这是真异常，不可能被补偿）
@@ -330,7 +330,7 @@ async def delete_kb(db: AsyncSession, kb_id: uuid.UUID) -> None:
                 status=KB_STATUS_PENDING_CLEANUP,
                 description=(
                     f"{kb.description or ''}\n"
-                    f"[P1-9] {reason}"
+                    f"[reaper] {reason}"
                 ),
             )
         )
@@ -350,7 +350,7 @@ async def delete_kb(db: AsyncSession, kb_id: uuid.UUID) -> None:
 
 
 def _safe_drop_kb_collection(kb_id: uuid.UUID) -> bool:
-    """P1-9 包装 drop_kb_collection 为 bool 返回。
+    """包装 drop_kb_collection 为 bool 返回。
 
     不抛异常，失败时返回 False 让调用方决策补偿路径。
     """
@@ -412,7 +412,7 @@ async def _cleanup_kb_neo4j(kb_id: uuid.UUID) -> bool:
     粒度：DETACH DELETE 所有 (n {kb_id: $kb_id})；
     一并删 Document 和所有"只属于这个 KB"的 Entity。
 
-    P1-9 改造：返 bool，True = 成功或可跳过，False = 真失败需要补偿
+    改造：返 bool，True = 成功或可跳过，False = 真失败需要补偿
     （驱动不可用 / 未初始化属于"无外存可清理"的预期场景，返 True；
      真正连上 Neo4j 但 Cypher 执行炸了才返 False）
     """
@@ -460,7 +460,7 @@ def _cleanup_kb_upload_dir(kb_id: uuid.UUID) -> None:
 async def count_entities_for_kb(kb_id: uuid.UUID) -> int:
     """查询指定 KB 在 Neo4j 中的 Entity 节点数（KB-03 详情用）。
 
-    V1.5 S5：接通 Neo4j 真实查询（S2 阶段的 stub 已拆掉）。
+    接通 Neo4j 真实查询（S2 阶段的 stub 已拆掉）。
     失败仅记 warning 返 0，不抛错（KB-03 详情接口不应因 Neo4j 抖动 500）。
     """
     try:

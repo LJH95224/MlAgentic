@@ -1,6 +1,6 @@
 """Agent 流式执行器（基于 LangGraph）。
 
-V1.0（3.3 阶段）：在保持对外签名稳定的前提下，把 3.1 的 mock 实现替换为
+在保持对外签名稳定的前提下，把 mock 实现替换为
 真实的 LangGraph ReAct 引擎。
 
 对外契约（与 mock 时期完全一致，service 层无感知）：
@@ -33,7 +33,7 @@ from app.core.config import get_settings
 logger = logging.getLogger(__name__)
 
 
-# ────────────── Agent 内部事件（与 3.1 mock 阶段保持一致） ──────────────
+# ────────────── Agent 内部事件（与 mock 阶段保持一致） ──────────────
 
 
 @dataclass

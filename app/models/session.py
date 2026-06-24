@@ -10,15 +10,15 @@ from app.models.base import Base, TimestampMixin, UUIDMixin
 
 
 class ChatSession(UUIDMixin, TimestampMixin, Base):
-    """会话表（V1.0 §4.1 → V1.5 §5.1 扩展）。
+    """会话表（扩展）。
 
-    V1.0 字段：id / created_at / metadata
-    V1.5 新增：title / summary / summarized_at / updated_at / message_count
+    既有字段：id / created_at / metadata
+    新增：title / summary / summarized_at / updated_at / message_count
     """
 
     __tablename__ = "chat_sessions"
 
-    # ------- V1.0 既有字段 -------
+    # ------- 既有字段 -------
     # metadata 是 SQLAlchemy Base 预留属性，用 db_metadata 避让
     db_metadata: Mapped[dict | None] = mapped_column(
         "metadata",
@@ -28,7 +28,7 @@ class ChatSession(UUIDMixin, TimestampMixin, Base):
         comment="预留元数据（会话偏好、地理范围等）",
     )
 
-    # ------- V1.5 新增字段（PRD §5.1） -------
+    # ------- 新增字段（PRD §5.1） -------
     title: Mapped[str | None] = mapped_column(
         String(100),
         nullable=True,

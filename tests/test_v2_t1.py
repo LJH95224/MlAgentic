@@ -1,12 +1,12 @@
-"""V2.0 T1 阶段单测（智能文档处理验收）。
+"""智能文档处理验收单测。
 
 覆盖：
 1. StructuredBlock 数据类
 2. 结构感知解析（MD/TXT 样本；PDF/DOCX 需要 fixture 文件，留给集成测试）
 3. StructuredChunk 数据类
 4. 结构感知切片策略（代码块/表格不被切断、标题段落组合、超长段落兜底）
-5. V2 入库管道步骤（解析→切片→noop→embed→milvus write→ner→bm25 noop）
-6. V1.5 parse_document 兼容性零回归
+5. 入库管道步骤（解析→切片→noop→embed→milvus write→ner→bm25 noop）
+6. parse_document 兼容性零回归
 """
 
 import os
@@ -405,7 +405,7 @@ class TestIngestPipelineSteps:
     """验证 V2 入库管道各步骤的逻辑（不连真服务）。"""
 
     def test_step_table_description_replaced_in_t7(self):
-        """T7 起 Step 4 不再是 noop —— 旧名 `_step_table_description_noop` 已删，
+        """Step 4 不再是 noop —— 旧名 `_step_table_description_noop` 已删，
         新名 `_step_table_description` 是 async 函数，单测覆盖在 tests/test_v2_t7.py。"""
         from app.tasks import ingest_task
 
@@ -413,14 +413,14 @@ class TestIngestPipelineSteps:
         assert not hasattr(ingest_task, "_step_table_description_noop")
 
     def test_step_summary_replaced_in_t7(self):
-        """T7 起 Step 5 不再是 noop —— 改名为 `_step_dual_layer_index`。"""
+        """Step 5 不再是 noop —— 改名为 `_step_dual_layer_index`。"""
         from app.tasks import ingest_task
 
         assert hasattr(ingest_task, "_step_dual_layer_index")
         assert not hasattr(ingest_task, "_step_summary_noop")
 
     def test_step_doc_metadata_replaced_in_t7(self):
-        """T7 起 Step 6 不再是 noop —— 改名为 `_step_doc_metadata`（async）。"""
+        """Step 6 不再是 noop —— 改名为 `_step_doc_metadata`（async）。"""
         from app.tasks import ingest_task
 
         assert hasattr(ingest_task, "_step_doc_metadata")
@@ -518,7 +518,7 @@ class TestIngestPipelineSteps:
         assert len(rows) == 1
         row = rows[0]
 
-        # V2 新增字段必须存在
+        # 新增字段必须存在
         assert "heading_path" in row
         assert "block_type" in row
         assert "page_number" in row
@@ -537,12 +537,12 @@ class TestIngestPipelineSteps:
 
 
 # ════════════════════════════════════════════════════════════════
-# 8. V1.5 兼容性零回归
+# 8. 兼容性零回归
 # ════════════════════════════════════════════════════════════════
 
 
 class TestV15Compatibility:
-    """V1.5 parse_document() 接口仍然可用。"""
+    """parse_document() 接口仍然可用。"""
 
     def test_parse_document_txt(self, sample_txt_file):
         text = parse_document(sample_txt_file)

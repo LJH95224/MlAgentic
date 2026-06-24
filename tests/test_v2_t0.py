@@ -1,11 +1,11 @@
-"""V2.0 T0 阶段单测（基础设施扩展验收）。
+"""基础设施扩展验收单测。
 
 覆盖：
-1. V2.0 配置项默认值 + 环境变量覆盖
+1. 配置项默认值 + 环境变量覆盖
 2. AgentTrace / EvalTask 新 PG 模型字段
 3. KB / KbFile 扩展字段
-4. V2 Milvus Schema 字段定义 + 稀疏向量 + BM25 索引
-5. V1.5 现有功能零回归
+4. Milvus Schema 字段定义 + 稀疏向量 + BM25 索引
+5. 现有功能零回归
 """
 
 import os
@@ -65,12 +65,12 @@ def _field_by_name(schema, name: str):
 
 
 # ════════════════════════════════════════════════════════════════
-# 1. V2.0 配置项
+# 1. 配置项
 # ════════════════════════════════════════════════════════════════
 
 
 class TestV2Settings:
-    """V2.0 新增 Settings 字段默认值 + 覆盖行为。"""
+    """新增 Settings 字段默认值 + 覆盖行为。"""
 
     # ── 应用基础 / CORS ──
 
@@ -193,7 +193,7 @@ class TestV2Settings:
 
 
 class TestAgentTraceModel:
-    """V2.0 AgentTrace 表字段校验（OBS-01）。"""
+    """AgentTrace 表字段校验（OBS-01）。"""
 
     def test_table_name(self):
         from app.models.agent_trace import AgentTrace
@@ -275,7 +275,7 @@ class TestAgentTraceModel:
 
 
 class TestEvalTaskModel:
-    """V2.0 EvalTask 表字段校验（EVA-01/02/03）。"""
+    """EvalTask 表字段校验（EVA-01/02/03）。"""
 
     def test_table_name(self):
         from app.models.eval_task import EvalTask
@@ -342,7 +342,7 @@ class TestEvalTaskModel:
 
 
 class TestKBV2Extensions:
-    """V2.0 对 KnowledgeBase 和 KbFile 的字段扩展。"""
+    """对 KnowledgeBase 和 KbFile 的字段扩展。"""
 
     def test_knowledge_base_has_v2_fields(self):
         from app.models.knowledge_base import KnowledgeBase
@@ -383,7 +383,7 @@ class TestKBV2Extensions:
         assert cols["summary_brief"].nullable is True
 
     def test_legacy_v1_5_tables_generate_v2_compat_alter_sql(self):
-        """旧 V1.5 PG 表缺 V2 字段时，启动期兼容迁移应补齐列。
+        """旧 PG 表缺字段时，启动期兼容迁移应补齐列。
 
         真实故障表现：/api/v1/knowledge-bases 列表查询 ORM 全字段时，
         旧库缺 retrieval_config / doc_metadata_schema 会触发 UndefinedColumn → 500。
@@ -397,6 +397,7 @@ class TestKBV2Extensions:
 
         sql = _build_v2_compat_alter_sql(existing)
 
+        # V2.0 baseline 引入的列（retrieval_config / doc_metadata_schema / doc_metadata / summary_brief）
         assert (
             "ALTER TABLE knowledge_bases "
             "ADD COLUMN IF NOT EXISTS retrieval_config JSONB"
@@ -408,13 +409,42 @@ class TestKBV2Extensions:
         assert "ALTER TABLE kb_files ADD COLUMN IF NOT EXISTS doc_metadata JSONB" in sql
         assert "ALTER TABLE kb_files ADD COLUMN IF NOT EXISTS summary_brief TEXT" in sql
 
+        # P1.9（2026-06-23）补：删除补偿状态 + 心跳锚点
+        assert (
+            "ALTER TABLE knowledge_bases ADD COLUMN IF NOT EXISTS updated_at "
+            "TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL"
+        ) in sql
+        assert (
+            "ALTER TABLE knowledge_bases ADD COLUMN IF NOT EXISTS "
+            "cleanup_retry_count INTEGER DEFAULT 0 NOT NULL"
+        ) in sql
+        assert (
+            "ALTER TABLE kb_files ADD COLUMN IF NOT EXISTS updated_at "
+            "TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL"
+        ) in sql
+        assert (
+            "ALTER TABLE kb_files ADD COLUMN IF NOT EXISTS "
+            "cleanup_retry_count INTEGER DEFAULT 0 NOT NULL"
+        ) in sql
+
     def test_existing_v2_columns_do_not_generate_alter_sql(self):
         """已是 V2 表结构时，兼容迁移必须幂等不执行 ALTER。"""
         from app.main import _build_v2_compat_alter_sql
 
+        # 列完整的 V2.0 表（含 P1.9 后新加的 updated_at / cleanup_retry_count）
         existing = {
-            "knowledge_bases": {"retrieval_config", "doc_metadata_schema"},
-            "kb_files": {"doc_metadata", "summary_brief"},
+            "knowledge_bases": {
+                "retrieval_config",
+                "doc_metadata_schema",
+                "updated_at",
+                "cleanup_retry_count",
+            },
+            "kb_files": {
+                "doc_metadata",
+                "summary_brief",
+                "updated_at",
+                "cleanup_retry_count",
+            },
         }
 
         assert _build_v2_compat_alter_sql(existing) == []
@@ -423,12 +453,12 @@ class TestKBV2Extensions:
 @skip_without_db
 @pytest.mark.asyncio
 async def test_v2_compat_migration_allows_orm_query_on_legacy_v1_5_tables():
-    """V1.5 旧表升级后，列表查询所需 ORM SELECT 不应再因缺列失败。"""
+    """旧表升级后，列表查询所需 ORM SELECT 不应再因缺列失败。"""
     import uuid
 
     from sqlalchemy import select, text
 
-    from app.db.session import engine
+    from app.db.session import AsyncSessionLocal, engine
     from app.main import _ensure_v2_compat_columns
     from app.models.knowledge_base import KnowledgeBase
 
@@ -486,9 +516,10 @@ async def test_v2_compat_migration_allows_orm_query_on_legacy_v1_5_tables():
 
         await _ensure_v2_compat_columns()
 
-        async with engine.begin() as conn:
+        # 走 ORM 会话拿到真实模型对象（Core connection.execute 拿到的是 Row）
+        async with AsyncSessionLocal() as session:
             row = (
-                await conn.execute(
+                await session.execute(
                     select(KnowledgeBase).where(KnowledgeBase.id == kb_id)
                 )
             ).scalar_one()
@@ -508,10 +539,10 @@ async def test_v2_compat_migration_allows_orm_query_on_legacy_v1_5_tables():
 
 
 class TestV2KBCollectionSchema:
-    """V2.0 KB Collection Schema 字段 + 稀疏向量 + BM25 索引。"""
+    """KB Collection Schema 字段 + 稀疏向量 + BM25 索引。"""
 
     def test_v2_schema_has_v1_5_base_fields(self):
-        """V2 Schema 必须包含 V1.5 的全部 8 个基础字段。"""
+        """Schema 必须包含全部 8 个基础字段。"""
         from app.rag.schema import build_v2_kb_collection_schema
 
         schema = build_v2_kb_collection_schema()
@@ -526,10 +557,10 @@ class TestV2KBCollectionSchema:
             "metadata",
             "kb_id",
         }
-        assert v1_5_fields <= names, f"V2 缺少 V1.5 基础字段：{v1_5_fields - names}"
+        assert v1_5_fields <= names, f"Schema 缺少基础字段：{v1_5_fields - names}"
 
     def test_v2_schema_has_7_new_fields(self):
-        """V2 Schema 必须包含 V2.0 新增的 7 个字段。"""
+        """Schema 必须包含新增的 7 个字段。"""
         from app.rag.schema import build_v2_kb_collection_schema
 
         schema = build_v2_kb_collection_schema()
@@ -546,7 +577,7 @@ class TestV2KBCollectionSchema:
         assert v2_fields <= names, f"V2 缺少新字段：{v2_fields - names}"
 
     def test_v2_schema_total_field_count(self):
-        """V2 Schema 总共 8(V1.5) + 7(V2.0) = 15 个字段。"""
+        """Schema 总共 15 个字段。"""
         from app.rag.schema import build_v2_kb_collection_schema
 
         schema = build_v2_kb_collection_schema()
@@ -630,7 +661,7 @@ class TestV2KBCollectionSchema:
 
 
 class TestV2IndexParams:
-    """V2.0 索引参数（HNSW + SPARSE_INVERTED_INDEX BM25 + INVERTED）。"""
+    """索引参数（HNSW + SPARSE_INVERTED_INDEX BM25 + INVERTED）。"""
 
     def test_v2_index_params_has_sparse_bm25(self):
         """V2 索引必须包含 sparse_vector 上的 SPARSE_INVERTED_INDEX + BM25。"""
@@ -677,15 +708,15 @@ class TestV2IndexParams:
 
 
 # ════════════════════════════════════════════════════════════════
-# 7. V1.5 零回归
+# 7. 零回归
 # ════════════════════════════════════════════════════════════════
 
 
 class TestV15NoRegression:
-    """验证 V1.5 Schema 在 V2.0 改造后仍然正常。"""
+    """验证 Schema 在改造后仍然正常。"""
 
     def test_v1_schema_still_works(self):
-        """V1.0 基线 Schema 未被破坏。"""
+        """基线 Schema 未被破坏。"""
         from app.rag.schema import build_knowledge_chunks_schema
 
         schema = build_knowledge_chunks_schema()
@@ -701,16 +732,16 @@ class TestV15NoRegression:
         }
 
     def test_v1_5_schema_still_works(self):
-        """V1.5 Schema 未被破坏。"""
+        """基础 Schema 未被破坏。"""
         from app.rag.schema import build_kb_collection_schema
 
         schema = build_kb_collection_schema()
         names = {f.name for f in schema.fields}
         assert "kb_id" in names
-        assert len(schema.fields) == 8  # V1.0 的 7 + kb_id
+        assert len(schema.fields) == 8  # 基础 7 + kb_id
 
     def test_v1_index_params_still_works(self):
-        """V1.5 索引参数仍正常（只有 HNSW + INVERTED）。"""
+        """基础索引参数仍正常（只有 HNSW + INVERTED）。"""
         from app.rag.schema import build_index_params
 
         mock_client = MagicMock()
@@ -719,7 +750,7 @@ class TestV15NoRegression:
 
         build_index_params(mock_client)
 
-        # V1.5 只有 2 个索引
+        # 基础只有 2 个索引
         assert mock_index_params.add_index.call_count == 2
 
 

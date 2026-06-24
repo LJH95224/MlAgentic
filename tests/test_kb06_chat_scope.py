@@ -1,4 +1,4 @@
-"""V1.5 S5 KB-06 单测：kb_ids 上下文 + 跨 KB Collection 检索 + KG 子图过滤。
+"""KB-06 单测：kb_ids 上下文 + 跨 KB Collection 检索 + KG 子图过滤。
 
 不依赖真 Milvus / Neo4j；用 monkeypatch + mock 验证：
 - contextvar 三态语义（None / [] / [...]）
@@ -137,7 +137,7 @@ def _reset_kb_ids_each_test():
 async def test_search_with_kb_ids_none_uses_default_collection(
     mock_embed, mock_client_v2, monkeypatch
 ):
-    """kb_ids=None（V1.0 默认行为）→ 查 settings.milvus_collection。"""
+    """kb_ids=None（默认行为）→ 查 settings.milvus_collection。"""
     monkeypatch.setenv("MILVUS_COLLECTION", "knowledge_chunks")
     from app.core.config import get_settings
 

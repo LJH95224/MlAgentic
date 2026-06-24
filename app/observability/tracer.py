@@ -1,4 +1,4 @@
-"""V2.0 Trace 采集器（OBS-01）。
+"""Trace 采集器（OBS-01）。
 
 核心类：
 - Tracer：上下文管理器，贯穿一次 /v2/query 调用全链路
@@ -65,7 +65,7 @@ class TraceStep:
 
 
 class Tracer:
-    """V2.0 推理链路追踪器（OBS-01）。
+    """推理链路追踪器（OBS-01）。
 
     作为上下文管理器使用，进入时生成 trace_id，退出时计算总耗时
     并将所有步骤批量写入 PG agent_traces 表。

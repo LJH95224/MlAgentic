@@ -1,4 +1,4 @@
-"""会话标题 / 摘要异步任务（V1.5 PRD §3.4 TASK-04 / TASK-05 + SES-07 / SES-08）。
+"""会话标题 / 摘要异步任务（PRD §3.4 TASK-04 / TASK-05 + SES-07 / SES-08）。
 
 【架构约定】（与 S3.2 ingest_task 一致 - dev_plan S3.5）：
 - Celery @task 同步 def 壳；核心 async def _main；体内只调一次 asyncio.run

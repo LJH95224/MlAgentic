@@ -1,4 +1,4 @@
-"""V2.0 IDP-05 文档级元数据自动提取。
+"""IDP-05 文档级元数据自动提取。
 
 PRD §IDP-05：文档入库时调用 LLM 对全文（前 N 字符）进行元数据提取，结果存入
 ``kb_files.doc_metadata`` JSONB 字段，``summary_brief`` 单独字段；后续检索可

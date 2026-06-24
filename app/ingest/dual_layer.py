@@ -1,4 +1,4 @@
-"""V2.0 IDP-04 双层索引（Hierarchical Index）。
+"""IDP-04 双层索引（Hierarchical Index）。
 
 PRD §IDP-04：对同一文档同时建立两个粒度的向量索引：
 
@@ -7,7 +7,7 @@ PRD §IDP-04：对同一文档同时建立两个粒度的向量索引：
 - **细粒度（fine chunk）**：IDP-02 产出的原始切片；is_summary=False，
   通过 parent_chunk_id 串回粗粒度，精排阶段使用
 
-聚合策略（T7 决策）：**按父级 heading_path 聚合**——取 chunk 的
+聚合策略：**按父级 heading_path 聚合**——取 chunk 的
 ``heading_path[:-1]`` 作为 group key（最末一级标题之外的祖先路径）。
 - 空 heading_path 的 chunk 单独一组
 - 仅 1 个 chunk 的组也保留（粗粒度索引保持完整）

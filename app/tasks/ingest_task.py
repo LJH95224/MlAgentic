@@ -1,26 +1,26 @@
-"""文件入库 Celery 任务（V2.0 IDP-06 十一步管道重构）。
+"""文件入库 Celery 任务（IDP-06 十一步管道重构）。
 
-V2.0 全面替换 V1.5 七步管道（A P2-12 已删除归档文件 ingest_task_v1.py）。
+全面替换七步管道（A P2-12 已删除归档文件 ingest_task_v1.py）。
 
-【架构约定 - 同 V1.5】
+【架构约定】
 - Celery @task 用同步 def；核心 async def _main；体内只调一次 asyncio.run
 - 所有外部连接（PG / Milvus / Neo4j）由 task_resources() 在 _main 入口现建、退出时 dispose
 - 不依赖 app.main 全局单例（worker 进程无 lifespan）
 
-【V2.0 十一步管道（IDP-06）】
+【十一步管道（IDP-06）】
     Step  1: status=processing, progress=0                 任务入口
     Step  2: 结构感知解析（IDP-01）                        progress=15
     Step  3: 结构感知切片（IDP-02）                        progress=25
-    Step  4: 表格描述生成（IDP-03，T7 接通；当前 noop）    progress=30
-    Step  5: 段落摘要生成（IDP-04，T7 接通；当前 noop）    progress=40
-    Step  6: 文档元数据提取（IDP-05，T7 接通；当前 noop）   progress=45
+    Step  4: 表格描述生成（IDP-03；当前 noop）    progress=30
+    Step  5: 段落摘要生成（IDP-04；当前 noop）    progress=40
+    Step  6: 文档元数据提取（IDP-05；当前 noop）   progress=45
     Step  7: 批量向量嵌入                                  progress=65
     Step  8: 写入 Milvus（V2 Schema）                      progress=80
     Step  9: NER 实体抽取 → 写入 Neo4j                     progress=92
-    Step 10: 写入 BM25 稀疏向量（T2 接通；当前 noop）      progress=97
+    Step 10: 写入 BM25 稀疏向量（当前 noop）      progress=97
     Step 11: status=completed, progress=100
 
-【PRD §3.4 TASK-03 重试策略 - 同 V1.5】
+【PRD §3.4 TASK-03 重试策略】
 - autoretry_for=(MilvusException, RedisConnectionError)
 - max_retries=3, 指数退避 30s → 60s → 120s
 """
@@ -72,17 +72,17 @@ logger = logging.getLogger(__name__)
 # ──────────────── 常量 ────────────────
 
 
-# V2.0 十一步管道的 progress 锚点
+# 十一步管道的 progress 锚点
 PROGRESS_START = 0
 PROGRESS_PARSED = 15
 PROGRESS_SPLIT = 25
-PROGRESS_TABLE_DESC = 30  # T7 接通
-PROGRESS_SUMMARY = 40  # T7 接通
-PROGRESS_DOC_META = 45  # T7 接通
+PROGRESS_TABLE_DESC = 30  # 待接通
+PROGRESS_SUMMARY = 40  # 待接通
+PROGRESS_DOC_META = 45  # 待接通
 PROGRESS_EMBEDDED = 65
 PROGRESS_MILVUS = 80
 PROGRESS_NER = 92
-PROGRESS_BM25 = 97  # T2 接通
+PROGRESS_BM25 = 97  # 待接通
 PROGRESS_DONE = 100
 
 # Embedding 批大小
@@ -95,7 +95,7 @@ MILVUS_BATCH_SIZE = 50
 NER_CONCURRENCY = 8
 NER_SINGLE_TIMEOUT_SECONDS = 25
 
-# Milvus 字段长度上限（防御性截断，同 V1.5）
+# Milvus 字段长度上限（防御性截断）
 _MAX_ENTITY_TAG_BYTES = 64
 _MAX_ENTITY_TAGS_PER_CHUNK = 50
 _MAX_CONTENT_BYTES = 65535
@@ -116,7 +116,7 @@ def _truncate_utf8(s: str, max_bytes: int) -> str:
 
 
 def _make_chunk_id_int(document_id: str, chunk_index: int) -> int:
-    """生成稳定 INT64 chunk_id（同 V1.5 策略，upsert 幂等）。"""
+    """生成稳定 INT64 chunk_id（upsert 幂等）。"""
     key = f"{document_id}::{chunk_index}".encode("utf-8")
     h = hashlib.sha256(key).digest()
     raw = int.from_bytes(h[:8], byteorder="big", signed=False)
@@ -272,7 +272,7 @@ async def _cleanup_neo4j_document_for_file(
         logger.warning("失败补偿清理 Neo4j 失败 kb_id=%s file_id=%s err=%s", kb_id, file_id, e)
 
 
-# ──────────────── V2.0 十一步管道 ────────────────
+# ──────────────── 十一步管道 ────────────────
 
 
 async def _step_parse_structured(file_record: KbFile) -> list[StructuredBlock]:
@@ -460,10 +460,10 @@ def _step_milvus_write_v2(
 ) -> None:
     """Step 8: 写入 Milvus V2 Schema（含 heading_path / block_type / sparse_vector 等新字段）。
 
-    V2.0 与 V1.5 的差异：
+    差异：
     - 使用 V2 Schema（15 字段）
     - 写入 heading_path / block_type / page_number / position_index / parent_chunk_id / is_summary
-    - sparse_vector 暂写空（T2 阶段才填实）
+    - sparse_vector 暂写空（待填实）
     """
     settings = get_settings()
     collection_name = build_kb_collection_name(kb.id)
@@ -481,7 +481,7 @@ def _step_milvus_write_v2(
 
     rows: list[dict] = []
     for i, (chunk, vec) in enumerate(zip(chunks, vectors)):
-        # entity_tags 处理（同 V1.5 逻辑）
+        # entity_tags 处理
         entity_tags: list[str] = []
         if chunk_entities is not None and i < len(chunk_entities):
             seen: set[str] = set()
@@ -520,7 +520,7 @@ def _step_milvus_write_v2(
                     "ingested_at": _utc_now_iso(),
                 },
                 "kb_id": str(kb.id),
-                # V2.0 新增字段
+                # 新增字段
                 "heading_path": heading_path,
                 "block_type": chunk.block_type[:_MAX_BLOCK_TYPE_LEN],
                 "page_number": chunk.page_number,
@@ -547,7 +547,7 @@ def _step_milvus_write_v2(
 
 
 async def _step_ner(chunks: list[StructuredChunk]) -> list[list[dict]]:
-    """Step 9: NER 实体抽取 → 写入 Neo4j（同 V1.5 逻辑，软失败）。"""
+    """Step 9: NER 实体抽取 → 写入 Neo4j（软失败）。"""
     settings = get_settings()
     if settings.skip_ner:
         logger.warning("SKIP_NER=true 跳过实体抽取（共 %d chunks）", len(chunks))
@@ -602,7 +602,7 @@ def _step_bm25_auto() -> None:
 
 
 async def _main(file_id_str: str, kb_id_str: str) -> dict:
-    """V2.0 十步入库管道。"""
+    """十步入库管道。"""
     file_id = uuid.UUID(file_id_str)
     kb_id = uuid.UUID(kb_id_str)
 
@@ -730,7 +730,7 @@ async def _step_neo4j_write(
     chunks: list[StructuredChunk],
     chunk_entities: list[list[dict]],
 ) -> int:
-    """Neo4j 写入（同 V1.5 逻辑，适配 StructuredChunk）。"""
+    """Neo4j 写入（适配 StructuredChunk）。"""
     settings = get_settings()
     document_id = str(file_record.id)
     kb_id_str = str(kb.id)
@@ -817,7 +817,7 @@ async def _step_neo4j_write(
     return len(entity_rows)
 
 
-# ──────────────── 异常分类（同 V1.5）────────────────
+# ──────────────── 异常分类 ────────────────
 
 
 def _classify_retryable(exc: BaseException) -> bool:
@@ -846,7 +846,7 @@ def _classify_retryable(exc: BaseException) -> bool:
     default_retry_delay=30,
 )
 def parse_and_ingest_task(self, file_id: str, kb_id: str) -> dict:
-    """文件解析入库任务入口（V2.0 十一步管道）。"""
+    """文件解析入库任务入口（十一步管道）。"""
     logger.info(
         "ingest 任务开始(V2) file_id=%s kb_id=%s task_id=%s attempt=%d",
         file_id,

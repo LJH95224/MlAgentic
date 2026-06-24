@@ -1,7 +1,7 @@
-"""单题 RAG 执行器（T11 评估专用）。
+"""单题 RAG 执行器（评估专用）。
 
 设计要点：
-- 复用 V2 query 的内部函数：hybrid_search → build_context_with_citation → generate_answer
+- 复用 query 的内部函数：hybrid_search → build_context_with_citation → generate_answer
 - 不写 Trace（评估场景每题写 8 条 step 会污染 agent_traces 表）
 - 不调 faithfulness_check（ragas 自身会跑 faithfulness 指标，避免 LLM 双跑）
 - 不绕 HTTP，避免对 worker host:port 的网络依赖

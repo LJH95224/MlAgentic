@@ -1,4 +1,4 @@
-"""V1.5 SES-09 上下文窗口截断 + 消息计数维护单测。
+"""SES-09 上下文窗口截断 + 消息计数维护单测。
 
 不依赖真 DB；用 AsyncMock 替换 db.execute，验：
 - system 消息全量、非 system 只取最近 N 条

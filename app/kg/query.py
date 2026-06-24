@@ -46,8 +46,8 @@ def build_cypher(
 
     单独成函数，让单测能直接断言 Cypher 文本而不必跑真 Neo4j。
 
-    V1.5 KB-06：传入 kb_ids 时追加 `start.kb_id IN $kb_ids` 过滤——只查这些
-    KB 的子图，不污染其它 KB 的实体。kb_ids=None 时不过滤（V1.0 行为）。
+    传入 kb_ids 时追加 `start.kb_id IN $kb_ids` 过滤——只查这些
+    KB 的子图，不污染其它 KB 的实体。kb_ids=None 时不过滤。
     """
     where_clauses: list[str] = []
     if entity_type:
@@ -55,7 +55,7 @@ def build_cypher(
     if relation_types:
         where_clauses.append("ALL(rel IN r WHERE type(rel) IN $rel_types)")
     if kb_ids:
-        # V1.5 KB-06：起点实体必须属于指定的 KB
+        # 起点实体必须属于指定的 KB
         where_clauses.append("start.kb_id IN $kb_ids")
 
     where_block = ""
@@ -115,7 +115,7 @@ async def execute_graph_query(
         entity_type: 可选，限定起点实体类型
         relation_types: 可选，限定路径上的关系类型列表
         max_hops: 路径最大跳数（自动 clamp 到 1-5）
-        kb_ids: V1.5 KB-06，可选 list[str(UUID)]，限定起点实体属于这些 KB
+        kb_ids: KB-06，可选 list[str(UUID)]，限定起点实体属于这些 KB
 
     Returns:
         每条形如 {"start":..., "start_type":..., "nodes_in_path":[...],

@@ -1,4 +1,4 @@
-"""V2.0 Trace 相关 Schema（OBS-01/02）。"""
+"""Trace 相关 Schema（OBS-01/02）。"""
 
 from __future__ import annotations
 

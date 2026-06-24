@@ -1,4 +1,4 @@
-"""V2.0 T9 · 置信度评分 + 答案自检 单测。
+"""置信度评分 + 答案自检 单测。
 
 覆盖矩阵：
 - CHC-03 compute_confidence：高分 / penalty / 空 chunks / coverage 上限 / rerank_score=None
@@ -10,7 +10,7 @@
 - Schema：QueryOptions 接受字段 / QueryResponse 含 4 个新字段
 - 端到端 v2_query：disabled 默认 / enabled 全 supported / enabled 含 unverified 触发 answer 追加 / 自检失败 skipped / 检索为空兜底
 
-mock 策略沿用 T8/T7：patch litellm.acompletion / hybrid_search / Tracer。
+mock 策略：patch litellm.acompletion / hybrid_search / Tracer。
 """
 
 from __future__ import annotations

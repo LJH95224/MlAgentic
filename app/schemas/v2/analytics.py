@@ -1,4 +1,4 @@
-"""V2.0 OBS-03 聚合统计 Schema（GET /api/v2/analytics）。"""
+"""OBS-03 聚合统计 Schema（GET /api/v2/analytics）。"""
 
 from __future__ import annotations
 

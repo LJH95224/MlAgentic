@@ -1,9 +1,9 @@
 """pytest 全局夹具。
 
-V1.0 集成测试依赖真实 PostgreSQL（通过 TEST_DATABASE_URL）。
+集成测试依赖真实 PostgreSQL（通过 TEST_DATABASE_URL）。
 LLM 单元测试使用 mock，不依赖网络 / 环境变量。
 
-V1.5 改造（2026-06-11）：
+改造（2026-06-11）：
 - 新增 `pg_client` fixture：跳过 lifespan 里的 Milvus / Neo4j 初始化，只接 PG ——
   SES-01~06 / chat_service 这类不依赖 LLM / Milvus / Neo4j 的集成测试改用这个，
   速度从 ~10s/case 降到 ~1s/case
@@ -14,10 +14,34 @@ V1.5 改造（2026-06-11）：
 
 import os
 from collections.abc import AsyncIterator
+from pathlib import Path
 
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
+
+
+# ────────────── 自动加载 .env ──────────────
+# pytest 进程启动时，pydantic-settings 还没初始化，conftest 里裸 os.getenv 读不到 .env
+# 这里手动解析项目根的 .env，把变量塞进 os.environ，让所有走 os.getenv 的代码也能拿到
+def _load_dotenv_into_environ() -> None:
+    """从项目根的 .env 加载键值到 os.environ；已存在的环境变量不覆盖。"""
+    env_path = Path(__file__).resolve().parent.parent / ".env"
+    if not env_path.exists():
+        return
+    for raw in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        # shell 已经 export 的优先（方便临时切库），只补齐缺失的
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
+_load_dotenv_into_environ()
 
 
 # ────────────── 集成测试 DB 相关 ──────────────

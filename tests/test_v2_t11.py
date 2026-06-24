@@ -1,4 +1,4 @@
-"""V2.0 T11 · RAGAS 评估 单测（EVA-01/02/03）。
+"""RAGAS 评估单测。
 
 覆盖矩阵：
 - Schemas：EvalCreateRequest / EvalSummary / EvalDetailResponse 校验

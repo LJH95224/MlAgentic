@@ -1,6 +1,6 @@
-"""Milvus Collection 命名规则（V1.5 PRD §5.4）。
+"""Milvus Collection 命名规则。
 
-V1.5 每个知识库对应独立 Milvus Collection，命名规则：
+每个知识库对应独立 Milvus Collection，命名规则：
     kb_{kb_id_no_hyphen}
 
 例：
@@ -54,7 +54,7 @@ def build_kb_collection_name(kb_id: uuid.UUID | str) -> str:
 def is_kb_collection_name(name: str) -> bool:
     """判断一个 Collection 名是否符合 KB 命名约定。
 
-    用于运维场景的"识别哪些 collection 是 V1.5 KB 创建的"，比如清理孤儿
+    用于运维场景的"识别哪些 collection 是 KB 创建的"，比如清理孤儿
     Collection 时筛选；业务代码不需要用它。
     """
     if not name.startswith(KB_COLLECTION_PREFIX):

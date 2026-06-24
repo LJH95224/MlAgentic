@@ -1,11 +1,11 @@
-"""Milvus 标量过滤与权限基线工具（V1/V2 共享）。
+"""Milvus 标量过滤与权限基线工具。
 
-这些函数与具体检索后端（V1 `retriever` 纯向量 / V2 `hybrid_retriever` 混合检索）无关，
-属于跨版本共用的过滤表达式拼装与权限基线注入逻辑。提到独立模块是为了：
+这些函数与具体检索后端（`retriever` 纯向量 / `hybrid_retriever` 混合检索）无关，
+属于共用的过滤表达式拼装与权限基线注入逻辑。提到独立模块是为了：
 
-1. 让 V2 `hybrid_retriever` 不再 `from app.rag.retriever import _build_filter_expr, get_current_role`
-   ——避免跨版本依赖私有名（违反"V1 不动 V2 独立"决策的精神，参见 P2-13）。
-2. 让 V1 `retriever` 重新导出本模块名字保持对外契约（tests/test_rag_retriever.py 仍按
+1. 让 `hybrid_retriever` 不再 `from app.rag.retriever import _build_filter_expr, get_current_role`
+   ——避免跨模块依赖私有名。
+2. 让 `retriever` 重新导出本模块名字保持对外契约（tests/test_rag_retriever.py 仍按
    `from app.rag.retriever import _build_filter_expr, _format_hits, ...` 导入）。
 
 权限基线（RAG-04）：所有 filter 表达式都强制包含
@@ -23,7 +23,7 @@ from app.core.config import get_settings
 def get_current_role() -> str:
     """获取当前请求的角色（RAG-04）。
 
-    V1.0 阶段没有用户体系，直接从 .env 读取 ``RAG_DEFAULT_ROLE``（默认 ``"ALL"``）。
+    当前没有用户体系，直接从 .env 读取 ``RAG_DEFAULT_ROLE``（默认 ``"ALL"``）。
     后续接入用户体系（JWT / contextvar）时只改本函数实现，工具签名不变。
     """
     return get_settings().rag_default_role
@@ -57,12 +57,12 @@ def _build_filter_expr(
     current_role: str,
     kb_ids: list[str] | None = None,
 ) -> str:
-    """拼装 Milvus filter 表达式（V1/V2 共用）。
+    """拼装 Milvus filter 表达式（跨检索后端共用）。
 
     基线过滤永远包含权限子句（RAG-04）。其他过滤按传参可选叠加。
 
     B M-06 新增 ``kb_ids`` 参数：在物理 Collection 隔离之上加一层 ``kb_id IN [...]``
-    兜底过滤。chunk schema 中的 ``kb_id`` 冗余字段（V1.5 §5.4）就是为此设计的——即使
+    兜底过滤。chunk schema 中的 ``kb_id`` 冗余字段就是为此设计的——即使
     Collection 命名规则改变或 contextvar 被绕过，也保证不会跨 KB 召回。
 
     Milvus filter 语法注意：
@@ -77,7 +77,7 @@ def _build_filter_expr(
         entity_tags: KG-04 图谱锚定标签数组，任一命中即可，None / 空列表跳过。
         current_role: 当前角色，由 :func:`get_current_role` 提供。
         kb_ids: B M-06 kb_id 兜底过滤列表。传 None 或空列表时不加该子句
-                （V1.0 全局 collection 场景不需要 kb_id 过滤）。
+                （全局 collection 场景不需要 kb_id 过滤）。
 
     Returns:
         Milvus filter 表达式字符串，多子句用 ``and`` 连接。

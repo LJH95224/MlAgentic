@@ -1,4 +1,4 @@
-"""知识库相关的 Pydantic Schema（V1.5 PRD §3.2 KB-01~05）。
+"""知识库相关的 Pydantic Schema（PRD §3.2 KB-01~05）。
 
 字段约束严格对齐 PRD：
 - name 全局唯一，最长 128
@@ -71,13 +71,13 @@ class KnowledgeBaseCreateRequest(BaseModel):
 
 
 class KnowledgeBaseUpdateRequest(BaseModel):
-    """PATCH /api/v1/knowledge-bases/{kb_id} 请求体（KB-04 + V2.0 HRE-06）。
+    """PATCH /api/v1/knowledge-bases/{kb_id} 请求体（KB-04 + HRE-06）。
 
     PRD 明确：`embedding_dim` / `chunk_size` / `chunk_overlap` 创建后只读，
     传入直接 422（借 extra="forbid"）。
     name / description / retrieval_config 可改，但至少传一个；都不传 → 422。
 
-    `retrieval_config`（V2.0 HRE-06）：知识库级默认检索配置，None 表示不变更，
+    `retrieval_config`（HRE-06）：知识库级默认检索配置，None 表示不变更，
     传 `{}` 表示清空所有覆盖字段，传具体 dict 表示部分覆盖（service 层做 merge）。
     """
 
@@ -91,7 +91,7 @@ class KnowledgeBaseUpdateRequest(BaseModel):
     )
     retrieval_config: dict | None = Field(
         None,
-        description="V2.0 知识库级检索默认配置（HRE-06）；None=不变更，{}=清空，dict=覆盖",
+        description="知识库级检索默认配置（HRE-06）；None=不变更，{}=清空，dict=覆盖",
     )
 
     @field_validator("name")
@@ -120,8 +120,7 @@ class KnowledgeBaseUpdateRequest(BaseModel):
 class KnowledgeBaseDetail(BaseModel):
     """知识库详情（KB-01 / KB-03 共用）。
 
-    `entity_count` 由 KB-03 详情接口实时计算（S2 阶段返回 0 stub，
-    S5 阶段接通 Neo4j 真实查询）。
+    `entity_count` 由 KB-03 详情接口实时计算（已接通 Neo4j 真实查询）。
     """
 
     id: uuid.UUID
@@ -133,10 +132,10 @@ class KnowledgeBaseDetail(BaseModel):
     status: str = Field(..., description="active / building / error")
     file_count: int = Field(..., description="冗余统计：关联文件数")
     chunk_count: int = Field(..., description="冗余统计：Milvus 向量切片数")
-    entity_count: int = Field(0, description="Neo4j 实体数（S5 阶段接通）")
+    entity_count: int = Field(0, description="Neo4j 实体数（已接通 Neo4j 查询）")
     retrieval_config: dict | None = Field(
         None,
-        description="V2.0 知识库级检索默认配置（HRE-06）",
+        description="知识库级检索默认配置（HRE-06）",
     )
     created_at: datetime
 

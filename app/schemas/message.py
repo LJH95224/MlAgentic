@@ -1,4 +1,4 @@
-"""会话消息相关的 Pydantic Schema（V1.5 SES-06）。"""
+"""会话消息相关的 Pydantic Schema（SES-06）。"""
 
 import uuid
 from datetime import datetime
@@ -12,7 +12,7 @@ MessageRole = Literal["system", "user", "assistant", "tool"]
 
 
 class MessageItem(BaseModel):
-    """单条消息（V1.5 SES-06）。
+    """单条消息（SES-06）。
 
     `tool_calls` 仅在 assistant 角色发起 function calling 时非空；
     `content` 仅在 tool 角色返回结果时可能为空（PRD §4.2 约定）。
@@ -28,7 +28,7 @@ class MessageItem(BaseModel):
 
 
 class MessageListResponse(BaseModel):
-    """消息游标翻页响应（V1.5 SES-06）。
+    """消息游标翻页响应（SES-06）。
 
     PRD 设计语义："返回 before 消息之前的、按 created_at 正序的 N 条"
     - 不传 before → 拉最早的 N 条

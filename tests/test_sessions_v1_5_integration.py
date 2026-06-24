@@ -1,4 +1,4 @@
-"""V1.5 SES-01~06 service 层 + 端到端集成测试（依赖真 PostgreSQL）。
+"""SES-01~06 service 层 + 端到端集成测试（依赖真 PostgreSQL）。
 
 需要环境变量 `TEST_DATABASE_URL=postgresql+asyncpg://...`，否则全部 skip。
 **不依赖 Milvus / Neo4j / LLM**：用 `pg_client` fixture（conftest 里跳 lifespan
@@ -164,7 +164,7 @@ async def test_delete_session_404_for_unknown(client):
 
 
 async def _insert_messages_directly(session_id: str, contents: list[str]):
-    """直接通过 DB 插消息（V1.5 当前还没 POST messages endpoint）。
+    """直接通过 DB 插消息（当前还没 POST messages endpoint）。
 
     ⚠️ 关键：必须给每条消息显式递增的 created_at —— 同一事务里多条 insert 走
     server_default=func.now() 拿到的是完全相同的时间戳，PG 的 ORDER BY 在 tie

@@ -32,8 +32,8 @@ logger = logging.getLogger(__name__)
 # ──────────────────── 权限解析 / 过滤表达式（共享） ────────────────────
 #
 # get_current_role / _milvus_str / _build_filter_expr 现在统一住在
-# app.rag.filters，V1（本模块）和 V2（hybrid_retriever）都从那里取，
-# 避免跨版本去 import 私有名（P2-13）。
+# app.rag.filters，本模块和 hybrid_retriever 都从那里取，
+# filters 模块已独立，此处保留 re-export 保持对外契约不变。
 # 这里保留 re-export 是为了保持对外契约不变（外部代码 / 单测都仍按
 # `from app.rag.retriever import _build_filter_expr, get_current_role` 导入）。
 
@@ -48,7 +48,7 @@ def _format_hits(hits: list[dict]) -> str:
         [1] (score=0.872, doc=typhoon_2024, tags=[台风,海洋]) 文本片段...
         [2] (score=0.851, doc=...) ...
 
-    单条不带 entity_tags 时也不报错（3.5 阶段实体抽取还没上线，标签可能为空）。
+    单条不带 entity_tags 时也不报错（实体抽取还没上线，标签可能为空）。
     """
     if not hits:
         return "（检索无结果。可尝试换关键词或放宽 doc_type 过滤后重试。）"
@@ -81,10 +81,10 @@ async def _do_search(
     document_id: str | None,
     entity_tags: list[str] | None,
 ) -> str:
-    """实际检索：复用 V2 混合检索链路并格式化给 Agent。
+    """实际检索：复用混合检索链路并格式化给 Agent。
 
     Agent Tool 与 `/api/v2/query` 共用 `hybrid_search`，避免 ReAct 主动检索仍停留在
-    V1 纯向量路径，导致 BM25、RRF、Reranker、结构字段在 Agent 场景不可用。
+    纯向量路径，导致 BM25、RRF、Reranker、结构字段在 Agent 场景不可用。
     """
     from app.rag.hybrid_retriever import format_hybrid_results, hybrid_search
 

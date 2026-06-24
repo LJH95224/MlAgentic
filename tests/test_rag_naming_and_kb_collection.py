@@ -1,9 +1,9 @@
-"""V1.5 S2.0 RAG 基础设施单测（命名 + Schema 扩展 + KB Collection 生命周期）。
+"""RAG 基础设施单测（命名 + Schema 扩展 + KB Collection 生命周期）。
 
 覆盖：
 - naming.build_kb_collection_name：UUID 对象 / 字符串 / 非法输入
 - naming.is_kb_collection_name：识别 KB 命名 vs 其它 collection
-- schema.build_kb_collection_schema：在 V1.0 schema 基础上多 1 个 kb_id 字段
+- schema.build_kb_collection_schema：在基础 schema 基础上多 1 个 kb_id 字段
 - milvus_client.create_kb_collection / drop_kb_collection：mock Milvus client
   覆盖：新建分支、已存在分支、创建失败回滚、drop 不存在的、drop 真删
 """
@@ -68,7 +68,7 @@ def test_is_kb_collection_name_positive():
 
 
 def test_is_kb_collection_name_negative_v1_collection():
-    """V1.0 的 knowledge_chunks 不应被识别成 KB Collection。"""
+    """knowledge_chunks 不应被识别成 KB Collection。"""
     assert is_kb_collection_name("knowledge_chunks") is False
 
 
@@ -83,7 +83,7 @@ def test_is_kb_collection_name_negative_bad_suffix():
 
 
 def test_kb_schema_has_exactly_one_more_field_than_v1():
-    """V1.5 KB Schema = V1.0 Schema + 1 个 kb_id 字段。"""
+    """KB Schema = 基础 Schema + 1 个 kb_id 字段。"""
     v1 = build_knowledge_chunks_schema()
     v1_5 = build_kb_collection_schema()
     assert len(v1_5.fields) == len(v1.fields) + 1
@@ -106,7 +106,7 @@ def test_kb_schema_kb_id_field_is_varchar_64():
 
 
 def test_kb_schema_preserves_v1_fields():
-    """V1.0 的 7 个字段都必须保留（chunk_id / vector / document_id / content /
+    """7 个基础字段都必须保留（chunk_id / vector / document_id / content /
     allowed_roles / entity_tags / metadata），权限/图谱基础不能丢。"""
     schema = build_kb_collection_schema()
     field_names = {f.name for f in schema.fields}
@@ -119,7 +119,7 @@ def test_kb_schema_preserves_v1_fields():
         "entity_tags",
         "metadata",
     ):
-        assert expected in field_names, f"V1.5 KB Schema 丢失 V1.0 字段: {expected}"
+        assert expected in field_names, f"KB Schema 丢失基础字段: {expected}"
 
 
 def test_kb_schema_disables_dynamic_field():
